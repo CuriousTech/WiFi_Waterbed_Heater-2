@@ -51,10 +51,11 @@ SOFTWARE.
 #include <SHT21.h> // https://github.com/CuriousTech/ESP8266-HVAC/tree/master/Libraries/SHT21
 #include "jsonstring.h"
 #include "display.h"
+#include "tempArray.h"
 
-const char controlPassword[] = "password";    // device password for modifying any settings
+const char controlPassword[] = "esp8266ct";    // device password for modifying any settings
 const int serverPort = 80;                    // HTTP port
-const char hostName[] = "WaterbedV2";
+const char hostName[] = "Waterbed";
 
 #define BTN      0 //  top
 #define ENC_A    2
@@ -94,16 +95,6 @@ int tonePeriod = 100;
 uint32_t toneEnd;
 uint8_t nAlarming;
 uint16_t nSnoozeTimer;
-
-struct tempArr{
-  uint16_t min;
-  uint16_t temp;
-  uint8_t state;
-  uint16_t rm;
-  uint16_t rh;
-};
-#define LOG_CNT 98
-tempArr tempArray[LOG_CNT];
 
 void jsonCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue);
 JsonParse jsonParse(jsonCallback);
@@ -195,9 +186,8 @@ void parseParams(AsyncWebServerRequest *request)
     AsyncWebParameter* p = request->getParam(i);
     p->value().toCharArray(temp, 100);
     String s = wifi.urldecode(temp);
-    switch( p->name().charAt(0)  )
+    if( p->name().equals("key") )
     {
-      case 'k': // key
         s.toCharArray(password, sizeof(password));
         break;
     }
@@ -224,18 +214,17 @@ void parseParams(AsyncWebServerRequest *request)
 
   lastIP = ip;
 
-  const char pNames[][8]={
-    "message", // 0
-    "rate",
+  const char Names[][8]={
+    "rate", // 0
     "reset",
     "beep",
-    "sid",
+    "ssid",
     "pass",
     "cost",
     "watts",
     "vibe",
     "tadj",
-    "", // 10
+    "", // 9
   };
 
   for ( uint8_t i = 0; i < request->params(); i++ ) {
@@ -249,25 +238,23 @@ void parseParams(AsyncWebServerRequest *request)
     val = s.toInt();
 
     uint8_t idx;
-    for(idx = 0; pNames[idx][0]; idx++)
-      if( p->name().equals(pNames[idx]) )
+    for(idx = 0; Names[idx][0]; idx++)
+      if( p->name().equals(Names[idx]) )
         break;
     switch( idx )
     {
-      case 0:  // message
-        break;
-      case 1: // rate
+      case 0: // rate
         if(val == 0)
           break; // don't allow 0
         ee.rate = val;
         sendState();
         break;
-      case 2: // reset
+      case 1: // reset
         updateAll(true);
         delay(100);
         ESP.reset();
         break;
-      case 3: // beep : /s?key=pass&beep=1000,800 (tone or ms,tone)
+      case 2: // beep : /s?key=pass&beep=1000,800 (tone or ms,tone)
         {
           int n = s.indexOf(",");
           if(n >0)
@@ -279,22 +266,22 @@ void parseParams(AsyncWebServerRequest *request)
           toneFreq = val;
         }
         break;
-      case 4: // SSID
+      case 3: // SSID
         s.toCharArray(ee.szSSID, sizeof(ee.szSSID));
         break;
-      case 5: // password
+      case 4: // password
         s.toCharArray(ee.szSSIDPassword, sizeof(ee.szSSIDPassword));
         updateAll( false );
         wifi.setPass();
         break;
-      case 6: // restore the month's total (in cents) after updates
+      case 5: // restore the month's total (in cents) after updates
         ee.fTotalCost = (float)val / 100;
         break;
-      case 7: // restore the month's total (in watthours) after updates
+      case 6: // restore the month's total (in watthours) after updates
         ee.fTotalWatts = (float)val;
         break;
 #ifdef VIBE
-      case 8: // vibe
+      case 7: // vibe
         {
           int n = s.indexOf(",");
           if(n >0)
@@ -308,18 +295,11 @@ void parseParams(AsyncWebServerRequest *request)
         digitalWrite(VIBE, LOW);
         break;
 #endif
-      case 9: // tadj (for room temp)
+      case 8: // tadj (for room temp)
         ee.tAdj[1] = constrain(val, -200, 200);
         break;
     }
   }
-}
-
-String sDec(int t) // just 123 to 12.3 string
-{
-  String s = String( t / 10 ) + ".";
-  s += t % 10;
-  return s;
 }
 
 void handleS(AsyncWebServerRequest *request) { // standard params, but no page
@@ -355,6 +335,8 @@ const char *jsonListCmd[] = { "cmd",
   "save",
   "aadj", // 20
   "eco",
+  "outtemp",
+  "outrh",
   NULL
 };
 
@@ -460,6 +442,12 @@ void jsonCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
         case 21: // eco
           ee.bEco = iValue ? true:false;
           setHeat();
+          break;
+        case 22: // outtemp
+          display.m_outTemp = iValue;
+          break;
+        case 23: // outrh
+          display.m_outRh = iValue;
           break;
       }
       break;
@@ -701,26 +689,13 @@ void setup()
   server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request){
     String json = "tdata=[";
     bool bSent = false;
-    for (int i = 0; i <= 96; ++i){
-      if(tempArray[i].state == 2) // now
-      {
-        tempArray[i].min = (hour()*60) + minute();
-        tempArray[i].temp = display.m_currentTemp;
-        tempArray[i].rm = display.m_roomTemp;
-        tempArray[i].rh = display.m_rh;
-      }
-      if(tempArray[i].temp) // only send entries in use (hitting a limit when SSL is compiled in)
-      {
-        if(bSent) json += ",";
-        jsonString js;
-        js.Var("tm", tempArray[i].min );
-        js.Var("t", String(sDec(tempArray[i].temp)) );
-        js.Var("s", tempArray[i].state );
-        js.Var("rm", String( sDec(tempArray[i].rm) ) );
-        js.Var("rh", String( sDec(tempArray[i].rh) ) );
-        json += js.Close();
+    for (int i = 0; i < LOG_CNT-1; ++i)
+    {
+      if(bSent) json += ",";
+      uint16_t len = json.length();
+      json += jsEntry(i);
+      if(len != json.length())
         bSent = true;
-      }
     }
     json += "]";
     request->send(200, "text/json", json);
@@ -850,7 +825,6 @@ void loop()
     {
       sendState();
       display.screen(true);
-      display.m_LightSet = 1;
     }
   }
 #endif
@@ -977,42 +951,6 @@ void loop()
   }
 
   delay(10);
-}
-
-void addLog()
-{
-  int iPos = hour() << 2; //+ ( minute() / 15); // 4 per hour
-  if( minute() ) // force 1 and 3 slots
-  {
-    if(minute() < 30)
-      iPos ++;
-    else if(minute() == 30)
-      iPos += 2;
-    else
-      iPos += 3;
-  }
-  if(iPos == 0) //fill in to 24:00
-  {
-    if(tempArray[95].state == 2)
-      memset(&tempArray[95], 0, sizeof(tempArr));
-    tempArray[96].min = 24*60;
-    tempArray[96].temp = display.m_currentTemp;
-    tempArray[96].state = display.m_bHeater;
-    tempArray[96].rm = display.m_roomTemp;
-    tempArray[96].rh = display.m_rh;
-  }
-  tempArray[iPos].min = (hour() * 60) + minute();
-  tempArray[iPos].temp = display.m_currentTemp;
-  tempArray[iPos].state = display.m_bHeater;
-  tempArray[iPos].rm = display.m_roomTemp;
-  tempArray[iPos].rh = display.m_rh;
-
-  if(iPos)
-    if(tempArray[iPos-1].state == 2)
-      memset(&tempArray[iPos-1], 0, sizeof(tempArr));
-
-  tempArray[iPos+1].temp = display.m_currentTemp;
-  tempArray[iPos+1].state = 2;  // use 2 as a break between old and new
 }
 
 void setHeat()
@@ -1267,7 +1205,7 @@ void Tone(unsigned int frequency, uint32_t duration)
 {
   analogWriteFreq(frequency);
   analogWrite(TONE, 500);
-  if(duration < 20)
+  if(duration <= 20)
   {
     delay(duration);
     analogWrite(TONE, 0);
