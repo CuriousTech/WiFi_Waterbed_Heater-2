@@ -11,7 +11,7 @@ enum Page
 {
   Page_Main,
   Page_Thermostat,
-  Page_Blank,
+  Page_Schedule,
   Page_SSID,
   Page_Keyboard,
   Page_Alarms,
