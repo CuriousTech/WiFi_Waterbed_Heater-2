@@ -5,6 +5,7 @@
 #include <ESP8266mDNS.h> // for WiFi.RSSI()
 #include "eeMem.h"
 #include "WiFiManager.h"
+#include "tempArray.h"
 
 Nextion nex;
 extern WiFiManager wifi;
@@ -135,7 +136,8 @@ bool Display::checkNextion() // all the Nextion recieved commands
               updateAlarms();
               break;
             case 18: // Schedule page
-              nex.sleep(true);
+              nex.setPage(Page_Schedule);
+              updateSchedule();
               break;
             case 19: // Thermostat page
               break;
@@ -172,21 +174,11 @@ bool Display::checkNextion() // all the Nextion recieved commands
               }
               else m_btnMode = 0;
               break;
-            case 3: // hour, minute, Am/Pm
-            case 4:
-            case 5:
-            case 6:
-            case 7:
-            case 8:
-            case 9:
-            case 10:
-            case 11:
-            case 12:
-            case 13:
-            case 14:
-            case 15:
-            case 16:
-            case 17:
+            case 3: case 4: case 5: // hour, minute, Am/Pm
+            case 6: case 7: case 8:
+            case 9: case 10: case 11:
+            case 12: case 13: case 14:
+            case 15: case 16: case 17:
               s = String("t") + m_almSelect; // change color back
               nex.itemColor(s, rgb16(0, 63, 31));
               m_almSelect = btn - 3;
@@ -194,12 +186,16 @@ bool Display::checkNextion() // all the Nextion recieved commands
               nex.itemColor(s, rgb16(31, 63, 31));
               updateAlarms();
               break;
-            case 19: // checkboxes
-            case 20:
-            case 21:
-            case 22:
-            case 23:
-              ee.alarm[btn-19].wday = ee.alarm[btn-19].wday ? 0:1;
+            case 19: case 20: case 21: case 22: case 23: case 24: case 25: // checkboxes
+            case 26: case 27: case 28: case 29: case 30: case 31: case 32:
+            case 33: case 34: case 35: case 36: case 37: case 38: case 39:
+            case 40: case 41: case 42: case 43: case 44: case 45: case 46:
+            case 47: case 48: case 49: case 50: case 51: case 52: case 53:
+              {
+                uint8_t alm = (btn-19)/7;
+                uint8_t bit = (btn-19)%7;
+                ee.alarm[alm].wday ^= 1 << bit;
+              }
               break;
             case 18: // Main
               nex.setPage(Page_Main);
@@ -208,9 +204,38 @@ bool Display::checkNextion() // all the Nextion recieved commands
               break;
           }
           break;
-
-        default: // all pages go back
-//          screen(true);
+        case Page_Schedule:
+          switch(btn)
+          {
+            case 1:
+              nex.setPage(Page_Main);
+              delay(25);
+              refreshAll();
+              break;
+            case 3: // up
+              schedUpDown(true);
+              break;
+            case 4: // down
+              schedUpDown(false);
+              break;
+            case 5: case 6: case 7: case 8: case 9:
+              selectSched(btn-5, 0); // name
+              break;
+            case 10: case 11: case 12: case 13: case 14:
+              selectSched(btn-10, 1); // hour
+              break;
+            case 15: case 16: case 17: case 18: case 19:
+              selectSched(btn-15, 2); // minute
+              break;
+            case 20: case 21: case 22: case 23: case 24:
+              selectSched(btn-20, 3); // temp
+              break;
+            case 27: // All
+              selectSched(0, 4);
+              break;
+          }
+          break;
+        default:
           break;
       }
       break;
@@ -252,26 +277,62 @@ bool Display::checkNextion() // all the Nextion recieved commands
   return bRtn;
 }
 
-void Display::updateAlarms()
+void Display::selectSched(uint8_t row, uint8_t col)
 {
   String s;
-  for(int i = 0; i < 5; i++)
+  if(m_schedCol < 4)
   {
-    uint16_t v = ee.alarm[i].timeSch;
-    uint8_t h = v / 60;
-    nex.itemText(i+10, (h > 11) ? "PM":"AM");
-    if(h == 0) h =12;
-    else if(h > 12) h -= 12;
-    s = h;
-    s += ":";
-    nex.itemText(i, s);
-    uint8_t m = v % 60;
-    s = "";
-    if(m < 10) s = "0";
-    s += m;
-    nex.itemText(i+5, s);
-    nex.checkItem(i, ee.alarm[i].wday ? 1:0);
-    s = String("t") + i;
+    s = String("t") + ((m_schedCol *5) + m_schedRow); // change color back
+    nex.itemColor(s, rgb16(0, 63, 31));
+  }
+  m_schedRow = row;
+  m_schedCol = col;
+  if(m_schedCol < 4)
+  {
+    s = String("t") + ((m_schedCol * 5) + m_schedRow); // change selected to white
+    nex.itemColor(s, rgb16(31, 63, 31));
+  }
+}
+
+void Display::schedUpDown(bool bUp)
+{
+  String s;
+  uint8_t m;
+
+  switch(m_schedCol)
+  {
+    case 0: // name
+      break;
+    case 1: // hour
+      ee.schedule[m_schedRow].timeSch += (bUp ? 60:-60);
+      ee.schedule[m_schedRow].timeSch %= 1440;
+      s = String(ee.schedule[m_schedRow].timeSch / 60) + ":";
+      nex.itemText(m_schedRow + 5, s );
+      break;
+    case 2: // minute
+      ee.schedule[m_schedRow].timeSch += (bUp ? 1:-1);
+      ee.schedule[m_schedRow].timeSch %= 1440;
+      m = ee.schedule[m_schedRow].timeSch % 60;
+      s = "";
+      if(m < 10) s = "0";
+      s += m;
+      nex.itemText(m_schedRow + 10, s );
+      break;
+    case 3: // temp
+      ee.schedule[m_schedRow].setTemp += (bUp ? 1:-1);
+      ee.schedule[m_schedRow].setTemp = constrain(ee.schedule[m_schedRow].setTemp, 600, 900);
+      nex.itemText(m_schedRow + 15, String((float)ee.schedule[m_schedRow].setTemp/10, 1) );
+      drawSched();
+      break;
+    case 4: // all
+      for(uint8_t i = 0; i < 5; i++)
+      {
+        ee.schedule[i].setTemp += (bUp ? 1:-1);
+        ee.schedule[i].setTemp = constrain(ee.schedule[i].setTemp, 600, 900);
+        nex.itemText(i + 15, String((float)ee.schedule[i].setTemp/10, 1) );
+      }
+      drawSched();
+      break;
   }
 }
 
@@ -345,6 +406,8 @@ void Display::buttonRepeat()
           break;
       }
       break;
+    case Page_Schedule:
+      break;
   }
   Tone(6000, 20);
 }
@@ -373,7 +436,7 @@ const char *_mon[] = {"","JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG",
 
 void Display::refreshAll()
 {
-  static int save[7];
+  static int save[10];
 
   if(nex.getPage())
   {
@@ -422,12 +485,12 @@ void Display::refreshAll()
   if(save[3] != m_roomTemp)
   {
     save[3] = m_roomTemp;
-    nex.itemText(8, String((float)m_roomTemp/10, 1) + " " );
+    nex.itemText(15, String((float)m_roomTemp/10, 1) + " " );
   }
   if(save[4] != m_rh)
   {
     save[4] = m_rh;
-    nex.itemText(9, String((float)m_rh/10, 1) + "%" );
+    nex.itemText(16, String((float)m_rh/10, 1) + "%" );
   }
   if((bool)save[5] != m_bAlarmOn)
   {
@@ -449,6 +512,16 @@ void Display::refreshAll()
     sTime = ee.bVaca ? "Vacation" : ee.schedule[m_schInd].name;
     nex.itemText(12, sTime );
   }
+  if(save[8] != m_outTemp)
+  {
+    save[3] = m_outTemp;
+    nex.itemText(8, String((float)m_outTemp/10, 1) + " " );
+  }
+  if(save[9] != m_outRh)
+  {
+    save[4] = m_outRh;
+    nex.itemText(9, String((float)m_outRh/10, 1) + "%" );
+  }
 }
 
 bool Display::checkAlarms()
@@ -458,10 +531,59 @@ bool Display::checkAlarms()
   uint16_t tm = (hour() * 60) + minute();
   for(int i = 0; i < 5; i++)
   {
-    if(ee.alarm[i].wday && ee.alarm[i].timeSch == tm) // wday is just active or not for now
-      return true;
+    if(ee.alarm[i].wday && ee.alarm[i].timeSch == tm)
+    {
+      if(ee.alarm[i].wday & 1<<day()) // check day bit
+        return true;
+    }
   }
   return false;
+}
+
+void Display::updateAlarms()
+{
+  String s;
+  for(int i = 0; i < 5; i++)
+  {
+    uint16_t v = ee.alarm[i].timeSch;
+    uint8_t h = v / 60;
+    nex.itemText(i+10, (h > 11) ? "PM":"AM");
+    if(h == 0) h =12;
+    else if(h > 12) h -= 12;
+    s = h;
+    s += ":";
+    nex.itemText(i, s);
+    uint8_t m = v % 60;
+    s = "";
+    if(m < 10) s = "0";
+    s += m;
+    nex.itemText(i+5, s);
+    for(int cb = 0; cb < 7; cb++)
+    {
+      nex.checkItem(i * 7 + cb, ee.alarm[i].wday & (1 << cb) ? 1:0);
+      delay(5); // fix the buffer oveflow
+    }
+  }
+}
+
+void Display::updateSchedule()
+{
+  String s;
+
+  for(uint8_t i = 0; i < ee.schedCnt && i < 5; i++)
+  {
+    nex.itemText(i, ee.schedule[i].name );
+    s = String(ee.schedule[i].timeSch / 60) + ":";
+    nex.itemText(i+5, s );
+    uint8_t m = ee.schedule[i].timeSch % 60;
+    s = "";
+    if(m < 10) s = "0";
+    s += m;
+    nex.itemText(i+10, s );
+    nex.itemText(i+15, String((float)ee.schedule[i].setTemp/10, 1) );
+    delay(2);
+  }
+  drawSched();
 }
 
 // Set slider to dimmer level
@@ -498,6 +620,7 @@ bool Display::screen(bool bOn)
   else
   {
       nex.brightness(NEX_OFF);
+      nex.setPage(Page_Main); // always wake on home page
   }
   bOldOn = bOn;
   return true; // it was changed
