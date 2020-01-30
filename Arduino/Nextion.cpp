@@ -1,6 +1,6 @@
 #include "Nextion.h"
 
-char *page_name[] = {"Main", "Thermostat", "blank", "SSID", "keyboard", "alarm"};
+char *page_name[] = {"Main", "Thermostat", "schedule", "SSID", "keyboard", "alarm"};
 
 // get changes
 int Nextion::service(char *pBuf)
