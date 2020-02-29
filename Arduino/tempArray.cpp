@@ -5,13 +5,11 @@
 #include "Nextion.h"
 #include <TimeLib.h>
 
-tempArr tempArray[LOG_CNT];
-
 extern Nextion nex;
 
-void addLog()
+void TempArray::add()
 {
-  int iPos = hour() << 2; //+ ( minute() / 15); // 4 per hour
+  int iPos = hour() << 2; // 4 per hour
   if( minute() ) // force 1 and 3 slots
   {
     if(minute() < 30)
@@ -23,48 +21,65 @@ void addLog()
   }
   if(iPos == 0) //fill in to 24:00
   {
-    if(tempArray[LOG_CNT-3].state == 2)
-      memset(&tempArray[LOG_CNT-3], 0, sizeof(tempArr));
-    tempArray[LOG_CNT-2].min = 24*60;
-    tempArray[LOG_CNT-2].temp = display.m_currentTemp;
-    tempArray[LOG_CNT-2].state = display.m_bHeater;
-    tempArray[LOG_CNT-2].rm = display.m_roomTemp;
-    tempArray[LOG_CNT-2].rh = display.m_rh;
+    if(m_log[LOG_CNT-3].state == 2)
+      memset(&m_log[LOG_CNT-3], 0, sizeof(tempArr));
+    m_log[LOG_CNT-2].min = 24*60;
+    m_log[LOG_CNT-2].temp = display.m_currentTemp;
+    m_log[LOG_CNT-2].state = display.m_bHeater;
+    m_log[LOG_CNT-2].rm = display.m_roomTemp;
+    m_log[LOG_CNT-2].rh = display.m_rh;
   }
-  tempArray[iPos].min = (hour() * 60) + minute();
-  tempArray[iPos].temp = display.m_currentTemp;
-  tempArray[iPos].state = display.m_bHeater;
-  tempArray[iPos].rm = display.m_roomTemp;
-  tempArray[iPos].rh = display.m_rh;
+  m_log[iPos].min = (hour() * 60) + minute();
+  m_log[iPos].temp = display.m_currentTemp;
+  m_log[iPos].state = display.m_bHeater;
+  m_log[iPos].rm = display.m_roomTemp;
+  m_log[iPos].rh = display.m_rh;
 
   if(iPos)
-    if(tempArray[iPos-1].state == 2)
-      memset(&tempArray[iPos-1], 0, sizeof(tempArr));
+    if(m_log[iPos-1].state == 2)
+      memset(&m_log[iPos-1], 0, sizeof(tempArr));
 
-  tempArray[iPos+1].temp = display.m_currentTemp;
-  tempArray[iPos+1].state = 2;  // use 2 as a break between old and new
+  m_log[iPos+1].temp = display.m_currentTemp;
+  m_log[iPos+1].state = 2;  // use 2 as a break between old and new
 }
 
-String jsEntry(uint16_t ent)
+String TempArray::jsEntry(uint16_t ent)
 {
   jsonString js;
 
-  if(tempArray[ent].state == 2) // now
+  if(m_log[ent].state == 2) // now
   {
-    tempArray[ent].min = (hour()*60) + minute();
-    tempArray[ent].temp = display.m_currentTemp;
-    tempArray[ent].rm = display.m_roomTemp;
-    tempArray[ent].rh = display.m_rh;
+    m_log[ent].min = (hour()*60) + minute();
+    m_log[ent].temp = display.m_currentTemp;
+    m_log[ent].rm = display.m_roomTemp;
+    m_log[ent].rh = display.m_rh;
   }
-  if(tempArray[ent].temp) // only send entries in use
+  if(m_log[ent].temp) // only send entries in use
   {
-    js.Var("tm", tempArray[ent].min );
-    js.Var("t", String((float)tempArray[ent].temp/10,1) );
-    js.Var("s", tempArray[ent].state );
-    js.Var("rm", String((float)tempArray[ent].rm/10, 1) );
-    js.Var("rh", String((float)tempArray[ent].rh/10, 1) );
+    js.Var("tm", m_log[ent].min );
+    js.Var("t", String((float)m_log[ent].temp/10,1) );
+    js.Var("s", m_log[ent].state );
+    js.Var("rm", String((float)m_log[ent].rm/10, 1) );
+    js.Var("rh", String((float)m_log[ent].rh/10, 1) );
   }
   return js.Close();
+}
+
+String TempArray::get()
+{
+  String json = "tdata=[";
+  bool bSent = false;
+  for (int i = 0; i < LOG_CNT-1; ++i)
+  {
+    if(m_log[i].temp)
+    {
+      if(bSent) json += ",";
+      json += jsEntry(i);
+      bSent = true;
+    }
+  }
+  json += "]";
+  return json;
 }
 
 #define Sch_Left     30
@@ -73,25 +88,24 @@ String jsEntry(uint16_t ent)
 #define Sch_Height  99
 uint16_t mn, mx;
 
-int16_t t2y(uint16_t t) // temp to y position
+int16_t TempArray::t2y(uint16_t t) // temp to y position
 {
   return Sch_Height - ((t-mn) * Sch_Height / (mx-mn));
 }
 
-uint16_t tm2x(uint16_t t) // time to x position
+uint16_t TempArray::tm2x(uint16_t t) // time to x position
 {
   return t * Sch_Width / (60*24);
 }
 
-uint16_t tween(uint16_t t1, uint16_t t2, int m, int r)
+uint16_t TempArray::tween(uint16_t t1, uint16_t t2, int m, int r)
 {
   uint16_t t = (t2 - t1) * (m * 100 / r ) / 100;
   return t + t1;
 }
 
-void drawSched()
+void TempArray::draw()
 {
-  nex.refreshItem(2);
   mn = 1000; // get range
   mx = 0;
   for(uint8_t i = 0; i < ee.schedCnt; i++)
@@ -101,8 +115,8 @@ void drawSched()
   }
   mn /= 10; mn *= 10; // floor
   mx += (10-(mx%10)); // ciel
-  nex.itemText(21, String(mx / 10) );
-  nex.itemText(20, String(mn / 10) );
+  nex.itemText(25, String(mx / 10) );
+  nex.itemText(26, String(mn / 10) );
 
   uint16_t m = Sch_Width - tm2x(ee.schedule[ee.schedCnt-1].timeSch); // wrap line
   uint16_t r = m + tm2x(ee.schedule[0].timeSch);
@@ -121,4 +135,7 @@ void drawSched()
     y = y2;
   }
   nex.line(x, y, Sch_Left + Sch_Width, t2y(ttl) + Sch_Top, rgb16(31, 31, 0) );
+  x = tm2x( hour() * 60 + minute() ) + Sch_Left;
+  y = t2y(display.m_currentTemp) + Sch_Top;
+  nex.line(x, y-1, x, y+1, rgb16(0, 63, 0) );
 }
