@@ -53,7 +53,7 @@ SOFTWARE.
 #include "display.h"
 #include "tempArray.h"
 
-const char controlPassword[] = "esp8266ct";    // device password for modifying any settings
+const char controlPassword[] = "password";    // device password for modifying any settings
 const int serverPort = 80;                    // HTTP port
 const char hostName[] = "Waterbed";
 
@@ -68,9 +68,11 @@ const char hostName[] = "Waterbed";
 #define TONE     15  // Speaker.  Beeps on powerup, but can also be controlled by aother IoT or add an alarm clock.
 #define ENC_B    16
 
+TempArray ta;
+
 OneWire ds(DS18B20);
 byte ds_addr[8];
-uint32_t lastIP;
+IPAddress lastIP;
 int nWrongPass;
 
 SHT21 sht(SDA, SCL, 4);
@@ -164,6 +166,13 @@ String setJson() // settings
   js.ArrayCost("tc", ee.costs, 12);
   js.Array("tw", ee.wh, 12);
 
+  IPAddress ip1(ee.hostIP[0]);
+  js.Var("hip", ip1.toString());
+  IPAddress ip2(ee.lightIP[0]);
+  js.Var("lip1", ip2.toString());
+  IPAddress ip3(ee.lightIP[1]);
+  js.Var("lip2", ip3.toString());
+
   return js.Close();
 }
 
@@ -193,7 +202,7 @@ void parseParams(AsyncWebServerRequest *request)
     }
   }
 
-  uint32_t ip = request->client()->remoteIP();
+  IPAddress ip = request->client()->remoteIP();
 
   if(strcmp(controlPassword, password))
   {
@@ -214,7 +223,7 @@ void parseParams(AsyncWebServerRequest *request)
 
   lastIP = ip;
 
-  const char Names[][8]={
+  const char Names[][10]={
     "rate", // 0
     "reset",
     "beep",
@@ -224,7 +233,10 @@ void parseParams(AsyncWebServerRequest *request)
     "watts",
     "vibe",
     "tadj",
-    "", // 9
+    "ppkwh",
+    "hostip",
+    "lightip1", // 11
+    "lightip2",
   };
 
   for ( uint8_t i = 0; i < request->params(); i++ ) {
@@ -269,7 +281,7 @@ void parseParams(AsyncWebServerRequest *request)
       case 3: // SSID
         s.toCharArray(ee.szSSID, sizeof(ee.szSSID));
         break;
-      case 4: // password
+      case 4: // pass
         s.toCharArray(ee.szSSIDPassword, sizeof(ee.szSSIDPassword));
         updateAll( false );
         wifi.setPass();
@@ -296,7 +308,31 @@ void parseParams(AsyncWebServerRequest *request)
         break;
 #endif
       case 8: // tadj (for room temp)
-        ee.tAdj[1] = constrain(val, -200, 200);
+        ee.tAdj[1] = constrain(val, -100, 80);
+        break;
+      case 9: // ppkwh
+        ee.ppkwh = val;
+        break;
+      case 10: // host IP / port  (call from host with ?h=80)
+        ee.hostIP[0] = ip[0];
+        ee.hostIP[1] = ip[1];
+        ee.hostIP[2] = ip[2];
+        ee.hostIP[3] = ip[3];
+        ee.hostPort = val ? val:80;
+        break;
+      case 11: // lightIP1
+        ip.fromString(s.c_str());
+        ee.lightIP[0][0] = ip[0];
+        ee.lightIP[0][1] = ip[1];
+        ee.lightIP[0][2] = ip[2];
+        ee.lightIP[0][3] = ip[3];
+        break;
+      case 12:
+        ip.fromString(s.c_str());
+        ee.lightIP[1][0] = ip[0];
+        ee.lightIP[1][1] = ip[1];
+        ee.lightIP[1][2] = ip[2];
+        ee.lightIP[1][3] = ip[3];
         break;
     }
   }
@@ -456,6 +492,7 @@ void jsonCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
 
 const char *jsonListPush[] = { "time",
   "time", // 0
+  "ppkw",
   NULL
 };
 
@@ -470,6 +507,13 @@ void jsonPushCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
   switch(iEvent)
   {
     case -1: // status
+      switch(iName)
+      {
+        case JC_DONE:
+          if(display.m_LightSet == 3) display.m_LightSet = 5; // light 2
+          if(display.m_LightSet == 4) display.m_LightSet = 6; // light 2
+          break;
+      }
       break;
     case 0: // time
       switch(iName)
@@ -477,16 +521,21 @@ void jsonPushCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
         case 0: // time
           setTime(iValue + ( (ee.tz + utime.getDST() ) * 3600));
           break;
+        case 1: // ppkw
+          ee.ppkwh = iValue;
+          break;
       }
       break;
     case 1: // state (from lights)
       switch(iName)
       {
         case 0: // on
-          display.m_bLightOn = iValue ? true:false;
+          if(display.m_LightSet == 3)
+            display.m_bLightOn = iValue ? true:false;
           break;
         case 1: // lvl
-          display.updateLevel(iValue);
+          if(display.m_LightSet == 4)
+            display.updateLevel(iValue);
           break;
       }
       break;
@@ -529,7 +578,7 @@ void LightSwitch(uint8_t i, uint8_t t, uint8_t v)
 {
   if(ee.lightIP[i][0] == 0)
     return;
-  String sUri = "/s?key=esp8266ct&";
+  String sUri = "/s?key=lightpass&";
   switch(t)
   {
     case 0: // switch
@@ -564,7 +613,7 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
       client->text(s);
       s = setJson();
       client->text(s);
-      client->ping();
+//      client->ping();
       break;
     case WS_EVT_DISCONNECT:    //client disconnected
       break;
@@ -687,18 +736,7 @@ void setup()
     request->send(200, "text/json", json);
   });
   server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request){
-    String json = "tdata=[";
-    bool bSent = false;
-    for (int i = 0; i < LOG_CNT-1; ++i)
-    {
-      if(bSent) json += ",";
-      uint16_t len = json.length();
-      json += jsEntry(i);
-      if(len != json.length())
-        bSent = true;
-    }
-    json += "]";
-    request->send(200, "text/json", json);
+    request->send(200, "text/json", ta.get() );
   });
 
   server.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -828,25 +866,6 @@ void loop()
     }
   }
 #endif
-  switch(display.m_LightSet)
-  {
-    case 1: // light 1 on/off 
-      LightSwitch(0, 0, display.m_bLightOn);
-      display.m_LightSet = 11;
-      break;
-    case 2:
-      LightSwitch(0, 1, display.m_nLightLevel);
-      display.m_LightSet = 12;
-      break;
-    case 11: // light 2 on/off
-      LightSwitch(1, 0, display.m_bLightOn);
-      display.m_LightSet = 0;
-      break;
-    case 12:
-      LightSwitch(1, 1, display.m_nLightLevel);
-      display.m_LightSet = 0;
-      break;
-  }
 
   if(toneEnd) // long tone delay
   {
@@ -856,6 +875,26 @@ void loop()
       analogWrite(TONE, 0);
     }
   }
+
+    switch(display.m_LightSet)
+    {
+      case 1: // light 1 on/off 
+        LightSwitch(0, 0, display.m_bLightOn);
+        display.m_LightSet = 3;
+        break;
+      case 2:
+        LightSwitch(0, 1, display.m_nLightLevel);
+        display.m_LightSet = 4;
+        break;
+      case 5: // light 2 on/off
+        LightSwitch(1, 0, display.m_bLightOn);
+        display.m_LightSet = 0;
+        break;
+      case 6:
+        LightSwitch(1, 1, display.m_nLightLevel);
+        display.m_LightSet = 0;
+        break;
+    }
 
   if(sec_save != second()) // only do stuff once per second
   {
@@ -900,13 +939,13 @@ void loop()
           }
           mon_save = month();
         }
-        addLog();
+        ta.add();
         if( updateAll(false) )      // update EEPROM if changed
           ws.textAll("print;EE updated");
         CallHost(Reason_Setup);
       }
       if(min_save == 30)
-        addLog(); // half hour log
+        ta.add(); // half hour log
     }
 
     if(nSnoozeTimer)
@@ -1033,14 +1072,14 @@ void checkTemp()
     display.m_bHeater = true;
     setHeat();
     sendState();
-    addLog();
+    ta.add();
   }
   else if(display.m_currentTemp >= display.m_hiTemp && display.m_bHeater == true)
   {
     display.m_bHeater = false;
     setHeat();
     sendState();
-    addLog();
+    ta.add();
   }
 }
 
