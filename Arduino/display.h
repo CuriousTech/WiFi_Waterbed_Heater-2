@@ -37,7 +37,9 @@ public:
   uint8_t m_LightSet;
 private:
   void buttonRepeat(void);
+  void nextAlarm(void);
   void refreshAll(void);
+  void refreshClock(void);
   void updateRSSI(void);
   void updateAlarms(void);
   String fmtTime(uint16_t v);
@@ -52,6 +54,7 @@ private:
   uint8_t m_almSelect;
   uint8_t m_schedRow;
   uint8_t m_schedCol;
+  uint8_t m_alarmIdx;
 };
 
 enum reportReason
