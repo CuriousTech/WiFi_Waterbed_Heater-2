@@ -12,7 +12,8 @@ extern WiFiManager wifi;
 extern void changeTemp(int delta, bool bAll);
 extern void Tone(unsigned int frequency, uint32_t duration);
 extern void CallHost(reportReason r);
-extern void LightSwitch(uint8_t t, uint8_t v);
+
+extern TempArray ta;
 
 void Display::init()
 {
@@ -30,15 +31,19 @@ void Display::oneSec()
 {
   if(wifi.isCfg() )
     return;
-  refreshAll();    // time update every seconds
   if(nex.getPage() == Page_Main)
   {
+    refreshAll();    // time update every seconds
     updateRSSI();     //
     if( m_backlightTimer ) // the dimmer thing
     {
       if(--m_backlightTimer == 0)
         screen(false);
     }
+  }
+  else if(nex.getPage() == Page_Clock)
+  {
+    refreshClock();
   }
 }
 
@@ -230,10 +235,16 @@ bool Display::checkNextion() // all the Nextion recieved commands
             case 20: case 21: case 22: case 23: case 24:
               selectSched(btn-20, 3); // temp
               break;
-            case 27: // All
-              selectSched(0, 4);
+            case 26: case 27: case 28: case 29: case 30:
+              selectSched(btn-26, 4); // thresh
+              break;
+            case 25: // All
+              selectSched(0, 5);
               break;
           }
+          break;
+        case Page_Clock:
+          screen(true);
           break;
         default:
           break;
@@ -280,14 +291,14 @@ bool Display::checkNextion() // all the Nextion recieved commands
 void Display::selectSched(uint8_t row, uint8_t col)
 {
   String s;
-  if(m_schedCol < 4)
+  if(m_schedCol < 5)
   {
     s = String("t") + ((m_schedCol *5) + m_schedRow); // change color back
     nex.itemColor(s, rgb16(0, 63, 31));
   }
   m_schedRow = row;
   m_schedCol = col;
-  if(m_schedCol < 4)
+  if(m_schedCol < 5)
   {
     s = String("t") + ((m_schedCol * 5) + m_schedRow); // change selected to white
     nex.itemColor(s, rgb16(31, 63, 31));
@@ -319,19 +330,30 @@ void Display::schedUpDown(bool bUp)
       nex.itemText(m_schedRow + 10, s );
       break;
     case 3: // temp
+      nex.refreshItem("s0");
+      delay(10); // was 6
       ee.schedule[m_schedRow].setTemp += (bUp ? 1:-1);
       ee.schedule[m_schedRow].setTemp = constrain(ee.schedule[m_schedRow].setTemp, 600, 900);
       nex.itemText(m_schedRow + 15, String((float)ee.schedule[m_schedRow].setTemp/10, 1) );
-      drawSched();
+      ta.draw();
       break;
-    case 4: // all
+    case 4: // thresh
+//      nex.refreshItem("s0");
+      ee.schedule[m_schedRow].thresh += (bUp ? 1:-1);
+      ee.schedule[m_schedRow].thresh %= 10;
+      nex.itemText(m_schedRow + 20, String(ee.schedule[m_schedRow].thresh) );
+//      ta.draw();
+      break;
+    case 5: // all
+      nex.refreshItem("s0");
+      delay(10); // was 4
       for(uint8_t i = 0; i < 5; i++)
       {
         ee.schedule[i].setTemp += (bUp ? 1:-1);
         ee.schedule[i].setTemp = constrain(ee.schedule[i].setTemp, 600, 900);
         nex.itemText(i + 15, String((float)ee.schedule[i].setTemp/10, 1) );
       }
-      drawSched();
+      ta.draw();
       break;
   }
 }
@@ -431,18 +453,32 @@ String Display::fmtTime(uint16_t v)
   return s;
 }
 
+void Display::nextAlarm() // find next active alarm
+{
+  uint8_t tm = hour() * 60 + minute();
+
+  m_alarmIdx = 0;
+  for(int i = MAX_SCHED - 1; i >= 0; i--)
+  {
+    if(tm < ee.alarm[i].timeSch)
+      break;
+    if(ee.alarm[i].wday & (1 << weekday()) )
+      m_alarmIdx = i;
+  }
+}
+
 const char *_days_short[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 const char *_mon[] = {"","JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
 
 void Display::refreshAll()
 {
-  static int save[10];
+  static int save[12];
 
   if(nex.getPage())
   {
     save[0] = -1;
     save[5] = -1;
-    save[6] = -1;
+    save[7] = -1;
     return;  // t7 and t8 are only on thermostat (for now)
   }
 
@@ -466,6 +502,7 @@ void Display::refreshAll()
     nex.itemText(7, _days_short[weekday()-1]);
   }*/
     nex.itemText(13, isPM() ? "PM":"AM");
+    nextAlarm();
   }
   sTime = "";
   if(second() < 10) sTime += "0";
@@ -492,36 +529,42 @@ void Display::refreshAll()
     save[4] = m_rh;
     nex.itemText(16, String((float)m_rh/10, 1) + "%" );
   }
-  if((bool)save[5] != m_bAlarmOn)
+  if((bool)save[5] != m_bAlarmOn || m_alarmIdx != save[6])
   {
     save[5] = m_bAlarmOn;
+    save[6] = m_alarmIdx;
     sTime = "ALARM ";
-    sTime += fmtTime(ee.alarm[0].timeSch);
+    sTime += fmtTime(ee.alarm[m_alarmIdx].timeSch);
     sTime += m_bAlarmOn ? " ON " : " OFF";
     nex.itemText(3, sTime );
     nex.itemColor("t3", m_bAlarmOn ? rgb16(31,0,0):rgb16(15,0,31) );
   }
-  if(save[6] != m_bHeater)
+  if(save[7] != m_bHeater)
   {
-    save[6] = m_bHeater;
+    save[7] = m_bHeater;
     nex.itemColor("t5", m_bHeater ? rgb16(31,0,0):rgb16(15,0,31) );
   }
-  if(save[7] != m_schInd)
+  if(save[8] != m_schInd)
   {
-    save[7] = m_schInd;
+    save[8] = m_schInd;
     sTime = ee.bVaca ? "Vacation" : ee.schedule[m_schInd].name;
     nex.itemText(12, sTime );
   }
-  if(save[8] != m_outTemp)
+  if(save[9] != m_outTemp)
   {
-    save[3] = m_outTemp;
+    save[9] = m_outTemp;
     nex.itemText(8, String((float)m_outTemp/10, 1) + " " );
   }
-  if(save[9] != m_outRh)
+  if(save[10] != m_outRh)
   {
-    save[4] = m_outRh;
+    save[10] = m_outRh;
     nex.itemText(9, String((float)m_outRh/10, 1) + "%" );
   }
+}
+
+void Display::refreshClock()
+{
+  
 }
 
 bool Display::checkAlarms()
@@ -568,22 +611,24 @@ void Display::updateAlarms()
 
 void Display::updateSchedule()
 {
-  String s;
-
   for(uint8_t i = 0; i < ee.schedCnt && i < 5; i++)
   {
     nex.itemText(i, ee.schedule[i].name );
-    s = String(ee.schedule[i].timeSch / 60) + ":";
-    nex.itemText(i+5, s );
-    uint8_t m = ee.schedule[i].timeSch % 60;
-    s = "";
-    if(m < 10) s = "0";
-    s += m;
+    nex.itemText(i+5, String(ee.schedule[i].timeSch / 60) + ":" );
+    uint8_t sec = ee.schedule[i].timeSch % 60;
+    String s = "";
+    if(sec < 10) s = "0";
+    s += sec;
     nex.itemText(i+10, s );
     nex.itemText(i+15, String((float)ee.schedule[i].setTemp/10, 1) );
-    delay(2);
+    nex.itemText(i+20, String(ee.schedule[i].thresh ) );
+    if(m_schInd == i)
+    {
+      nex.backColor(String("t")+i, rgb16(12,20,8));
+    }
+    delay(5);
   }
-  drawSched();
+  ta.draw();
 }
 
 // Set slider to dimmer level
@@ -620,7 +665,8 @@ bool Display::screen(bool bOn)
   else
   {
       nex.brightness(NEX_OFF);
-      nex.setPage(Page_Main); // always wake on home page
+      if(nex.getPage())
+        nex.setPage(Page_Main); // always wake on home page
   }
   bOldOn = bOn;
   return true; // it was changed
