@@ -1,3 +1,5 @@
+#ifndef TEMPARRAY_H
+#define TEMPARRAY_H
 
 struct tempArr{
   uint16_t min;
@@ -6,9 +8,26 @@ struct tempArr{
   uint16_t rm;
   uint16_t rh;
 };
+
 #define LOG_CNT 98
-extern tempArr tempArray[LOG_CNT];
 
 void addLog(void);
-String jsEntry(uint16_t ent);
+String getTempArray(void);
 void drawSched(void);
+
+class TempArray
+{
+public:
+  TempArray(){}
+  void add(void);
+  String get(void);
+  void draw(void);
+protected:
+  String jsEntry(uint16_t ent);
+  int16_t t2y(uint16_t t);
+  uint16_t tm2x(uint16_t t);
+  uint16_t tween(uint16_t t1, uint16_t t2, int m, int r);
+  tempArr m_log[LOG_CNT];
+};
+
+#endif
