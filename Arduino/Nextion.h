@@ -15,6 +15,7 @@ enum Page
   Page_SSID,
   Page_Keyboard,
   Page_Alarms,
+  Page_Clock,
 };
 
 class Nextion
