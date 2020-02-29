@@ -1,7 +1,5 @@
 #include "Nextion.h"
 
-char *page_name[] = {"Main", "Thermostat", "schedule", "SSID", "keyboard", "alarm"};
-
 // get changes
 int Nextion::service(char *pBuf)
 {
@@ -89,7 +87,7 @@ uint8_t Nextion::brightness(uint8_t level)
 
 void Nextion::setPage(uint8_t n)
 {
-  Serial.print(String("page ") + page_name[n]);
+  Serial.print(String("page ") + n);
   FFF();
   m_page = n;
 }
