@@ -712,7 +712,7 @@ void Display::updateRSSI()
   int sigStrength = 127 + rssiT;
   int wh = 24; // width and height
   int x = 12; // X/Y position
-  int y = 198;
+  int y = 180;
   int sect = 127 / 5; // 25
   int dist = wh  / 5; // distance between blocks
 
