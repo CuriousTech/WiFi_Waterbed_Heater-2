@@ -106,24 +106,8 @@ JsonClient jsonPush(jsonPushCallback);
 const char days[7][4] = {"Sun","Mon","Tue","Wed","Thr","Fri","Sat"};
 const char months[12][4] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
 
-float currCost()
-{
-  float fCurTotalCost = ee.fTotalCost;
-  if(onCounter) fCurTotalCost += (float)onCounter * (float)ee.watts * ((float)ee.ppkwh / 36000000000.0); // add current cycle
-  return fCurTotalCost;
-}
-
-float currWatts()
-{
-  float fCurTotalWatts = ee.fTotalWatts;
-  if(onCounter) fCurTotalWatts += (float)onCounter * (float)ee.watts  / 3600; // add current cycle
-  return fCurTotalWatts;
-}
-
 bool updateAll(bool bForce)
 {
-  ee.fTotalCost = currCost();
-  ee.fTotalWatts = currWatts();
   return eemem.update(bForce);
 }
 
@@ -139,8 +123,6 @@ String dataJson()
   js.Var("on",   digitalRead(HEAT));
   js.Var("temp", String((float)display.m_roomTemp/10, 1) );
   js.Var("rh",   String((float)display.m_rh/10, 1) );
-  js.Var("tc",   String(currCost(), 3) );
-  js.Var("wh",   String(currWatts(), 1) );
   js.Var("c",    String((bCF) ? "C":"F"));
   js.Var("oc",   onCounter );
   js.Var("mot",  bMotion);
@@ -163,16 +145,8 @@ String setJson() // settings
   js.Var("r",  ee.rate);
   js.Var("e",  ee.bEco);
   js.Array("item", ee.schedule, 8);
-  js.ArrayCost("tc", ee.costs, 12);
-  js.Array("tw", ee.wh, 12);
-
-  IPAddress ip1(ee.hostIP[0]);
-  js.Var("hip", ip1.toString());
-  IPAddress ip2(ee.lightIP[0]);
-  js.Var("lip1", ip2.toString());
-  IPAddress ip3(ee.lightIP[1]);
-  js.Var("lip2", ip3.toString());
-
+  js.Array("ts", ee.tSecsMon, 12);
+  js.Array("ppkwm", ee.ppkwm, 12);
   return js.Close();
 }
 
@@ -204,7 +178,7 @@ void parseParams(AsyncWebServerRequest *request)
 
   IPAddress ip = request->client()->remoteIP();
 
-  if(strcmp(controlPassword, password))
+  if(strcmp(controlPassword, password) || nWrongPass)
   {
     if(nWrongPass == 0)
       nWrongPass = 10;
@@ -235,8 +209,7 @@ void parseParams(AsyncWebServerRequest *request)
     "tadj",
     "ppkwh",
     "hostip",
-    "lightip1", // 11
-    "lightip2",
+    "lightip", // 11
   };
 
   for ( uint8_t i = 0; i < request->params(); i++ ) {
@@ -287,10 +260,8 @@ void parseParams(AsyncWebServerRequest *request)
         wifi.setPass();
         break;
       case 5: // restore the month's total (in cents) after updates
-        ee.fTotalCost = (float)val / 100;
         break;
       case 6: // restore the month's total (in watthours) after updates
-        ee.fTotalWatts = (float)val;
         break;
 #ifdef VIBE
       case 7: // vibe
@@ -311,7 +282,7 @@ void parseParams(AsyncWebServerRequest *request)
         ee.tAdj[1] = constrain(val, -100, 80);
         break;
       case 9: // ppkwh
-        ee.ppkwh = val;
+        ee.ppkwm[month()-1] = ee.ppkwh = val;
         break;
       case 10: // host IP / port  (call from host with ?h=80)
         ee.hostIP[0] = ip[0];
@@ -326,13 +297,6 @@ void parseParams(AsyncWebServerRequest *request)
         ee.lightIP[0][1] = ip[1];
         ee.lightIP[0][2] = ip[2];
         ee.lightIP[0][3] = ip[3];
-        break;
-      case 12:
-        ip.fromString(s.c_str());
-        ee.lightIP[1][0] = ip[0];
-        ee.lightIP[1][1] = ip[1];
-        ee.lightIP[1][2] = ip[2];
-        ee.lightIP[1][3] = ip[3];
         break;
     }
   }
@@ -413,7 +377,7 @@ void jsonCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
           ws.textAll(setJson()); // update all the entries
           break;
         case 6: // ppkw
-          ee.ppkwh = iValue;
+          ee.ppkwm[month()-1] = ee.ppkwh = iValue;
           break;
         case 7: // vaca
           ee.bVaca = iValue;
@@ -507,13 +471,6 @@ void jsonPushCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
   switch(iEvent)
   {
     case -1: // status
-      switch(iName)
-      {
-        case JC_DONE:
-          if(display.m_LightSet == 3) display.m_LightSet = 5; // light 2
-          if(display.m_LightSet == 4) display.m_LightSet = 6; // light 2
-          break;
-      }
       break;
     case 0: // time
       switch(iName)
@@ -522,7 +479,7 @@ void jsonPushCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
           setTime(iValue + ( (ee.tz + utime.getDST() ) * 3600));
           break;
         case 1: // ppkw
-          ee.ppkwh = iValue;
+          ee.ppkwm[month()-1] = ee.ppkwh = iValue;
           break;
       }
       break;
@@ -530,16 +487,56 @@ void jsonPushCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
       switch(iName)
       {
         case 0: // on
-          if(display.m_LightSet == 3)
-            display.m_bLightOn = iValue ? true:false;
+          display.m_bLightOn = iValue ? true:false;
           break;
         case 1: // lvl
-          if(display.m_LightSet == 4)
-            display.updateLevel(iValue);
+          display.updateLevel(iValue);
           break;
       }
       break;
   }
+}
+
+struct cQ
+{
+  IPAddress ip;
+  String sUri;
+  uint16_t port;
+};
+#define CQ_CNT 16
+cQ queue[CQ_CNT];
+
+void checkQueue()
+{
+  int i;
+  for(i = 0; i < CQ_CNT; i++)
+  {
+    if(queue[i].ip[0])
+      break;
+  }
+  if(i == CQ_CNT) return; // nothing to do
+
+  if(jsonPush.status() != JC_IDLE) // These should be fast, so kill if not
+    return;
+
+  jsonPush.begin(queue[i].ip.toString().c_str(), queue[i].sUri.c_str(), queue[i].port, false, false, NULL, NULL, 300);
+  jsonPush.addList(jsonListPush);
+  jsonPush.addList(jsonListPush2);
+  queue[i].ip[0] = 0;
+}
+
+void callQueue(IPAddress ip, String sUri, uint16_t port)
+{
+  int i;
+  for(i = 0; i < CQ_CNT; i++)
+  {
+    if(queue[i].ip[0] == 0)
+      break;
+  }
+  if(i == CQ_CNT) return; // full
+  queue[i].ip = ip;
+  queue[i].sUri = sUri;
+  queue[i].port = port;
 }
 
 void CallHost(reportReason r)
@@ -569,31 +566,26 @@ void CallHost(reportReason r)
   }
 
   IPAddress ip(ee.hostIP);
-  String url = ip.toString();
-  jsonPush.begin(url.c_str(), sUri.c_str(), 443, false, false, NULL, NULL);
-  jsonPush.addList(jsonListPush);
+  callQueue(ip, sUri, ee.hostPort);
 }
 
-void LightSwitch(uint8_t i, uint8_t t, uint8_t v)
+void LightSwitch(uint8_t t, uint8_t v)
 {
-  if(ee.lightIP[i][0] == 0)
+  if(ee.lightIP[0][0] == 0)
     return;
-  String sUri = "/s?key=lightpass&";
+  String sUri = "/s?key=esp8266ct&";
   switch(t)
   {
     case 0: // switch
       sUri += "on=";
       break;
     case 1: // level
-      sUri += "lvl=";
+      sUri += "level=";
       break;
   }
   sUri += v;
-  IPAddress ip(ee.lightIP[i]);
-  String url = ip.toString();
-  jsonPush.begin(url.c_str(), sUri.c_str(), 80, false, false, NULL, NULL);
-  jsonPush.addList(jsonListPush);
-  jsonPush.addList(jsonListPush2);
+  IPAddress ip(ee.lightIP[0]);
+  callQueue(ip, sUri, 80);
 }
 
 void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len)
@@ -685,8 +677,7 @@ void setup()
     if(wifi.isCfg())
       request->send( 200, "text/html", wifi.page() ); // WIFI config page
   });
-
-  server.on ( "/iot", HTTP_GET | HTTP_POST, [](AsyncWebServerRequest *request) // Main webpage interface
+  server.on ( "/iot", HTTP_GET | HTTP_POST, [](AsyncWebServerRequest *request )
   {
     parseParams(request);
     #ifdef USE_SPIFFS
@@ -789,7 +780,7 @@ void setup()
   if(wifi.isCfg() == false)
   {
     utime.start();
-    MDNS.addService("http", "tcp", serverPort);
+    MDNS.addService("iot", "tcp", serverPort);
   }
 
   sht.init();
@@ -813,6 +804,7 @@ void loop()
   ArduinoOTA.handle();
 #endif
   checkButtons();
+  checkQueue();
   if(display.checkNextion())  // check for touch, etc.
     nAlarming = 0; // stop alarm
   if(!wifi.isCfg())
@@ -863,6 +855,7 @@ void loop()
     {
       sendState();
       display.screen(true);
+      LightSwitch(0, 1);
     }
   }
 #endif
@@ -876,25 +869,17 @@ void loop()
     }
   }
 
-    switch(display.m_LightSet)
-    {
-      case 1: // light 1 on/off 
-        LightSwitch(0, 0, display.m_bLightOn);
-        display.m_LightSet = 3;
-        break;
-      case 2:
-        LightSwitch(0, 1, display.m_nLightLevel);
-        display.m_LightSet = 4;
-        break;
-      case 5: // light 2 on/off
-        LightSwitch(1, 0, display.m_bLightOn);
-        display.m_LightSet = 0;
-        break;
-      case 6:
-        LightSwitch(1, 1, display.m_nLightLevel);
-        display.m_LightSet = 0;
-        break;
-    }
+  switch(display.m_LightSet)
+  {
+    case 1: // light 1 on/off 
+      LightSwitch(0, display.m_bLightOn);
+      display.m_LightSet = 0;
+      break;
+    case 2:
+      LightSwitch(1, display.m_nLightLevel);
+      display.m_LightSet = 0;
+      break;
+  }
 
   if(sec_save != second()) // only do stuff once per second
   {
@@ -930,18 +915,12 @@ void loop()
         }
         if( mon_save != month() )
         {
-          if(mon_save) // first hour after start hour
-          {
-            ee.costs[mon_save-1] = ee.fTotalCost * 100; // f dollars to dec cents at the end of the month
-            ee.fTotalCost = 0;
-            ee.wh[mon_save-1] = (uint32_t)ee.fTotalWatts; // save watt hours used at the end of the month
-            ee.fTotalWatts = 0;
-          }
           mon_save = month();
+          ee.tSecsMon[mon_save-1] = 0;
         }
         ta.add();
         if( updateAll(false) )      // update EEPROM if changed
-          ws.textAll("print;EE updated");
+          ws.textAll("print;EEPROM updated");
         CallHost(Reason_Setup);
       }
       if(min_save == 30)
@@ -961,8 +940,13 @@ void loop()
     }
 
     if(nWrongPass)    nWrongPass--;
-    if(digitalRead(HEAT)) onCounter++;
-
+    if(digitalRead(HEAT))
+      onCounter++;
+    else if(onCounter)
+    {
+      ee.tSecsMon[month()-1] += onCounter;
+      onCounter = 0;
+    }
     static uint16_t s = 1;
     if(ee.bEco && display.m_bHeater) // eco mode
     {
@@ -985,6 +969,7 @@ void loop()
         updateAll( false );
       }
       bLastOn = display.m_bHeater;
+      ee.tSecsMon[month()-1] += onCounter;
       onCounter = 0;
     }
   }
@@ -1029,6 +1014,7 @@ void checkTemp()
     display.m_bHeater = false;
     setHeat();
     ws.textAll("alert; DS18 not present");
+    Tone(1000, 100);
     return;
   }
 
@@ -1040,6 +1026,7 @@ void checkTemp()
     display.m_bHeater = false;
     setHeat();
     ws.textAll("alert;Invalid CRC");
+    Tone(1000, 100);
     return;
   }
 
@@ -1047,6 +1034,7 @@ void checkTemp()
 
   if(raw > 630 || raw < 200){ // first reading is always 1360 (0x550)
     ws.textAll("alert;DS error");
+    Tone(1000, 100);
     return;
   }
 
