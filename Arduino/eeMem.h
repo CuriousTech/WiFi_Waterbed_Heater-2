@@ -38,10 +38,10 @@ struct eeSet // EEPROM backed data
   uint16_t ppkwh;
   uint16_t rate;
   uint16_t watts;
-  uint16_t costs[12];
-  uint32_t wh[12];    // watt hours per month
+  uint16_t ppkwm[12];
+  uint32_t tSecsMon[12];    // total secwatt hours per month
   int16_t tAdj[2];
-  int16_t pids[3];
+  int16_t pids[3]; // Todo: real PID
   uint8_t  hostIP[4];
   uint16_t hostPort;
   uint8_t  statIP[4];
@@ -49,11 +49,8 @@ struct eeSet // EEPROM backed data
   uint8_t  lightIP[2][4];
   uint8_t  resIP[4];
   uint16_t resPort;
-  int8_t res[20];
+  int8_t res[32];
   Alarm   alarm[MAX_SCHED];
-// end of CRC
-  float   fTotalCost;
-  float   fTotalWatts;
 }; // 620
 
 class eeMem
