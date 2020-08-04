@@ -11,29 +11,29 @@ eeSet ee = {
   5,       // schedCnt
   false,  // vacation mode
   true,  // average
-  true, // Eco mode
+  false, // Eco mode
   {
-    {825,  3*60, 3, 0, "Midnight"},
-    {815,  6*60, 2, 0, "Early"},  // temp, time, thresh, wday
-    {810,  8*60, 3, 0, "Morning"},
-    {810, 16*60, 3, 0, "Day"},
-    {825, 21*60, 3, 0, "Night"},
+    {831,  3*60, 3, 0, "Midnight"},
+    {824,  6*60, 2, 0, "Early"},  // temp, time, thresh, wday
+    {819,  8*60, 3, 0, "Morning"},
+    {819, 16*60, 3, 0, "Day"},
+    {834, 21*60, 3, 0, "Night"},
     {830,  0*60, 3, 0, "Sch6"},
     {830,  0*60, 3, 0, "Sch7"},
     {830,  0*60, 3, 0, "Sch8"}
   },
-  152, // ppkwh (0.152)
-  58, // rate
+  140, // ppkwh (0.140)
+  50, // rate
   290, // watts
-  {318,284,296, 189, 7, 246, 190,202,475, 49,279,310}, // cost months
-  {140797,0,0,0,0,0,0,0,0,32637,133370,204380}, // watts
+  {140,140,140,140,140,140,140,140,140,140,140,140}, // ppkwh per month
+  {140797,90131,189843,161339,122453,33761,32020,0,0,32637,133370,204380}, // seconds
   {0,0}, // tAdj[2]
-  {60*3,60*1, 5},
-  {192,168,0,100}, // host
+  {60*3,60*1, 5}, // pids
+  {192,168,31,100}, // host
   80,
-  {192,168,0,103}, // thermostat
+  {192,168,31,125}, // thermostat
   80,
-  {{192,168,0,126},{192,168,0,124}}, // lights
+  {{192,168,31,8},{0,0,0,0}}, // lights
   {0,0,0,0}, // extra
   80,
   {0}, // res
@@ -41,9 +41,6 @@ eeSet ee = {
     {0, 1000, 8*60, 0x3E},
     {0},
   }, // alarms
-//end of CRC (low priority below)
-  0.0,
-  0.0,
 };
 
 eeMem::eeMem()
@@ -56,7 +53,7 @@ bool eeMem::update(bool bForce) // write the settings if changed
 {
   uint16_t old_sum = ee.sum;
   ee.sum = 0;
-  ee.sum = Fletcher16((uint8_t*)&ee, offsetof(eeSet, fTotalCost) );
+  ee.sum = Fletcher16((uint8_t*)&ee, sizeof(eeSet));
 
   if(bForce == false && old_sum == ee.sum)
   {
@@ -64,7 +61,7 @@ bool eeMem::update(bool bForce) // write the settings if changed
   }
 
   ee.sum = 0;
-  ee.sum = Fletcher16((uint8_t*)&ee, offsetof(eeSet, fTotalCost) );
+  ee.sum = Fletcher16((uint8_t*)&ee, sizeof(eeSet) );
 
   uint8_t *pData = (uint8_t *)&ee;
   for(int addr = 0; addr < sizeof(eeSet); addr++)
@@ -88,7 +85,7 @@ bool eeMem::verify(bool bComp)
     return false; // revert to defaults if struct size changes
   uint16_t sum = pwTemp[1];
   pwTemp[1] = 0;
-  pwTemp[1] = Fletcher16(data, offsetof(eeSet, fTotalCost) );
+  pwTemp[1] = Fletcher16(data, sizeof(eeSet) );
   if(pwTemp[1] != sum) return false; // revert to defaults if sum fails
 
   if(bComp)
