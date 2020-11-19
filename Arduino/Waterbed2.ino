@@ -103,9 +103,6 @@ JsonParse jsonParse(jsonCallback);
 void jsonPushCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue);
 JsonClient jsonPush(jsonPushCallback);
 
-const char days[7][4] = {"Sun","Mon","Tue","Wed","Thr","Fri","Sat"};
-const char months[12][4] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
-
 bool updateAll(bool bForce)
 {
   return eemem.update(bForce);
@@ -210,6 +207,7 @@ void parseParams(AsyncWebServerRequest *request)
     "ppkwh",
     "hostip",
     "lightip", // 11
+    "notif",
   };
 
   for ( uint8_t i = 0; i < request->params(); i++ ) {
@@ -298,6 +296,9 @@ void parseParams(AsyncWebServerRequest *request)
         ee.lightIP[0][2] = ip[2];
         ee.lightIP[0][3] = ip[3];
         break;
+      case 12: // notif
+        display.Notification(s);
+        break;
     }
   }
 }
@@ -337,6 +338,7 @@ const char *jsonListCmd[] = { "cmd",
   "eco",
   "outtemp",
   "outrh",
+  "notif",
   NULL
 };
 
@@ -449,6 +451,9 @@ void jsonCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
         case 23: // outrh
           display.m_outRh = iValue;
           break;
+        case 24: // notif
+          display.Notification(psValue);
+          break;
       }
       break;
   }
@@ -509,6 +514,7 @@ cQ queue[CQ_CNT];
 void checkQueue()
 {
   int i;
+  static uint32_t timeout;
   for(i = 0; i < CQ_CNT; i++)
   {
     if(queue[i].ip[0])
@@ -517,12 +523,20 @@ void checkQueue()
   if(i == CQ_CNT) return; // nothing to do
 
   if(jsonPush.status() != JC_IDLE) // These should be fast, so kill if not
-    return;
+  {
+    if(millis() - timeout > 300)
+    {
+      jsonPush.end(); // force quit
+    }
+    else
+      return;
+  }
 
   jsonPush.begin(queue[i].ip.toString().c_str(), queue[i].sUri.c_str(), queue[i].port, false, false, NULL, NULL, 300);
   jsonPush.addList(jsonListPush);
   jsonPush.addList(jsonListPush2);
   queue[i].ip[0] = 0;
+  timeout = millis();
 }
 
 void callQueue(IPAddress ip, String sUri, uint16_t port)
@@ -819,12 +833,12 @@ void loop()
     else
       newtemp = sht.getTemperatureF() * 10;
     newtemp += ee.tAdj[1]; // calibrated temp value
-    
+
     tempMedian[0].add(newtemp);
     tempMedian[0].getAverage(2, newtemp);
     tempMedian[1].add(sht.getRh() * 10);
     tempMedian[1].getAverage(2, newrh);
-    
+
     if(display.m_roomTemp != newtemp)
     {
       display.m_roomTemp = newtemp;
@@ -939,7 +953,8 @@ void loop()
         Tone(3000, 500);
     }
 
-    if(nWrongPass)    nWrongPass--;
+    if(nWrongPass)
+      nWrongPass--;
     if(digitalRead(HEAT))
       onCounter++;
     else if(onCounter)
@@ -1014,7 +1029,7 @@ void checkTemp()
     display.m_bHeater = false;
     setHeat();
     ws.textAll("alert; DS18 not present");
-    Tone(1000, 100);
+    display.Notification("WARNING\r\nDS18 not detected");
     return;
   }
 
@@ -1026,7 +1041,7 @@ void checkTemp()
     display.m_bHeater = false;
     setHeat();
     ws.textAll("alert;Invalid CRC");
-    Tone(1000, 100);
+    display.Notification("WARNING\r\nDS18 error");
     return;
   }
 
@@ -1034,7 +1049,7 @@ void checkTemp()
 
   if(raw > 630 || raw < 200){ // first reading is always 1360 (0x550)
     ws.textAll("alert;DS error");
-    Tone(1000, 100);
+    display.Notification("WARNING\r\nDS18 error");
     return;
   }
 
