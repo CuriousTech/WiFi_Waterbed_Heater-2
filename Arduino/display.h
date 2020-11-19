@@ -21,6 +21,7 @@ public:
   bool isOff(void);
   void updateLevel(uint8_t lvl);
   bool checkAlarms(void);
+  void Notification(String s);
 
   uint16_t m_roomTemp;
   uint16_t m_rh;
@@ -55,6 +56,9 @@ private:
   uint8_t m_schedRow;
   uint8_t m_schedCol;
   uint8_t m_alarmIdx;
+  bool m_bNotifVis;
+#define NOTIFS 10
+  String m_sNotif[NOTIFS];
 };
 
 enum reportReason
