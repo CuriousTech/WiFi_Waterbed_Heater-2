@@ -13,6 +13,8 @@ extern void changeTemp(int delta, bool bAll);
 extern void Tone(unsigned int frequency, uint32_t duration);
 extern void CallHost(reportReason r);
 
+extern void ePrint(const char *s);
+
 extern TempArray ta;
 
 void Display::init()
@@ -145,6 +147,20 @@ bool Display::checkNextion() // all the Nextion recieved commands
               updateSchedule();
               break;
             case 19: // Thermostat page
+              break;
+            case 26: // notifications ack
+              m_bNotifVis = false;
+              for(int i = 0; i < NOTIFS; i++)
+              {
+                if(m_sNotif[i].length())
+                {
+                  nex.itemText(18, m_sNotif[i]);
+                  m_sNotif[i] = "";
+                  m_bNotifVis = true;
+                }
+              }
+              if(m_bNotifVis == false)
+                nex.visible("t18", 0);
               break;
           }
           break;
@@ -358,6 +374,26 @@ void Display::schedUpDown(bool bUp)
   }
 }
 
+void Display::Notification(String s)
+{
+  display.screen(true);
+  if(m_bNotifVis) // stuff it
+  {
+    for(int i = 0; i < NOTIFS; i++)
+    {
+      if(m_sNotif[i].length() == 0)
+        m_sNotif[i] = s;
+    }
+  }
+  else // first
+  {
+    nex.visible("t18", 1);
+    nex.itemText(18, s);
+    m_bNotifVis = true;
+  }
+  Tone(3000, 200); // notification sound
+}
+
 void Display::buttonRepeat()
 {
   uint8_t alm;
@@ -474,7 +510,7 @@ void Display::refreshAll()
 {
   static int save[12];
 
-  if(nex.getPage())
+  if(nex.getPage() || m_bNotifVis) // not on main page or notification on
   {
     save[0] = -1;
     save[5] = -1;
