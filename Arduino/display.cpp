@@ -6,11 +6,12 @@
 #include "eeMem.h"
 #include "WiFiManager.h"
 #include "tempArray.h"
+#include "music.h"
 
 Nextion nex;
 extern WiFiManager wifi;
+extern Music mus;
 extern void changeTemp(int delta, bool bAll);
-extern void Tone(unsigned int frequency, uint32_t duration);
 extern void CallHost(reportReason r);
 
 extern void ePrint(const char *s);
@@ -82,7 +83,7 @@ bool Display::checkNextion() // all the Nextion recieved commands
         return bRtn;
       }
       if(cBuf[3]) // press, not release
-        Tone(6000, 20);
+        mus.add(6000, 20);
 
       switch(cBuf[1]) // page
       {
@@ -157,6 +158,7 @@ bool Display::checkNextion() // all the Nextion recieved commands
                   nex.itemText(18, m_sNotif[i]);
                   m_sNotif[i] = "";
                   m_bNotifVis = true;
+                  break;
                 }
               }
               if(m_bNotifVis == false)
@@ -379,10 +381,22 @@ void Display::Notification(String s)
   display.screen(true);
   if(m_bNotifVis) // stuff it
   {
+    bool bAdd = true;
     for(int i = 0; i < NOTIFS; i++)
     {
+      if(m_sNotif[i].equals(s))
+      {
+        bAdd = false;
+        break;
+      }
+    }
+    if(bAdd) for(int i = 0; i < NOTIFS; i++)
+    {
       if(m_sNotif[i].length() == 0)
+      {
         m_sNotif[i] = s;
+        break;
+      }
     }
   }
   else // first
@@ -391,7 +405,7 @@ void Display::Notification(String s)
     nex.itemText(18, s);
     m_bNotifVis = true;
   }
-  Tone(3000, 200); // notification sound
+  mus.add(3000, 200); // notification sound
 }
 
 void Display::buttonRepeat()
@@ -467,7 +481,7 @@ void Display::buttonRepeat()
     case Page_Schedule:
       break;
   }
-  Tone(6000, 20);
+  mus.add(6000, 20);
 }
 
 String Display::fmtTime(uint16_t v)
