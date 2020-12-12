@@ -52,6 +52,7 @@ SOFTWARE.
 #include "jsonstring.h"
 #include "display.h"
 #include "tempArray.h"
+#include "music.h"
 
 const char controlPassword[] = "password";    // device password for modifying any settings
 const int serverPort = 80;                    // HTTP port
@@ -69,6 +70,7 @@ const char hostName[] = "Waterbed";
 #define ENC_B    16
 
 TempArray ta;
+Music mus;
 
 OneWire ds(DS18B20);
 byte ds_addr[8];
@@ -92,11 +94,21 @@ bool bCF = false;
 uint32_t onCounter;
 bool bMotion = true;
 
-int toneFreq = 1000;
-int tonePeriod = 100;
-uint32_t toneEnd;
 uint8_t nAlarming;
 uint16_t nSnoozeTimer;
+
+uint32_t nHeatCnt;
+uint32_t nCoolCnt;
+uint32_t nOvershootCnt;
+uint32_t nOvershootPeak;
+uint32_t nHeatETA;
+uint32_t nCoolETA;
+bool bBoost;
+uint16_t nOvershootStartTemp;
+uint16_t nOvershootEndTemp;
+int16_t nOvershootTempDiff;
+uint32_t nOvershootTime;
+
 
 void jsonCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue);
 JsonParse jsonParse(jsonCallback);
@@ -123,6 +135,8 @@ String dataJson()
   js.Var("c",    String((bCF) ? "C":"F"));
   js.Var("oc",   onCounter );
   js.Var("mot",  bMotion);
+  js.Var("eta",  nHeatETA);
+  js.Var("cooleta",  nCoolETA);
   return js.Close();
 }
 
@@ -208,6 +222,7 @@ void parseParams(AsyncWebServerRequest *request)
     "hostip",
     "lightip", // 11
     "notif",
+    "music",
   };
 
   for ( uint8_t i = 0; i < request->params(); i++ ) {
@@ -240,13 +255,14 @@ void parseParams(AsyncWebServerRequest *request)
       case 2: // beep : /s?key=pass&beep=1000,800 (tone or ms,tone)
         {
           int n = s.indexOf(",");
+          int tonePeriod = 1000;
           if(n >0)
           {
             tonePeriod = constrain(val, 10, 1000);
             s.remove(0, n+1);
             val = s.toInt();
           }
-          toneFreq = val;
+          mus.add(val, tonePeriod);
         }
         break;
       case 3: // SSID
@@ -299,6 +315,9 @@ void parseParams(AsyncWebServerRequest *request)
       case 12: // notif
         display.Notification(s);
         break;
+      case 13:
+        mus.play(0);
+        break;
     }
   }
 }
@@ -328,15 +347,13 @@ const char *jsonListCmd[] = { "cmd",
   "S",
   "T",
   "H",
-  "beepF",
-  "beepP", // 15
   "vibe",
   "watts",
   "dot",
   "save",
-  "aadj", // 20
+  "aadj",
   "eco",
-  "outtemp",
+  "outtemp", // 20
   "outrh",
   "notif",
   NULL
@@ -413,13 +430,7 @@ void jsonCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
           checkLimits();      // constrain and check new values
           checkSched(true);   // reconfigure to new schedule
           break;
-       case 14: // beepF
-          toneFreq = iValue;
-          break;
-       case 15: // beepP (beep period)
-          tonePeriod = iValue;
-          break;
-       case 16: // vibe (vibe period)
+       case 14: // vibe (vibe period)
 #ifdef VIBE
           vibePeriod = iValue;
           vibeCnt = 1;
@@ -427,31 +438,31 @@ void jsonCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
           digitalWrite(VIBE, LOW);
 #endif
           break;
-        case 17: // watts
+        case 15: // watts
           ee.watts = iValue;
           break;
-        case 18: // dot displayOnTimer
+        case 16: // dot displayOnTimer
           if(iValue)
             display.screen(true);
           break;
-        case 19: // save
+        case 17: // save
           updateAll(true);
           break;
-        case 20: // aadj
+        case 18: // aadj
           changeTemp(iValue, true);
           ws.textAll(setJson()); // update all the entries
           break;
-        case 21: // eco
+        case 19: // eco
           ee.bEco = iValue ? true:false;
           setHeat();
           break;
-        case 22: // outtemp
+        case 20: // outtemp
           display.m_outTemp = iValue;
           break;
-        case 23: // outrh
+        case 21: // outrh
           display.m_outRh = iValue;
           break;
-        case 24: // notif
+        case 22: // notif
           display.Notification(psValue);
           break;
       }
@@ -765,6 +776,7 @@ void setup()
   ArduinoOTA.begin();
   ArduinoOTA.onStart([]() {
     digitalWrite(HEAT, LOW);
+    ee.tSecsMon[month()-1] += onCounter;
     updateAll( true );
   });
 #endif
@@ -800,8 +812,8 @@ void setup()
   sht.init();
   display.init();
   digitalWrite(ESP_LED, HIGH);
-  Tone(2000, 50);
-  Tone(5000, 100);
+  mus.add(2000, 50);
+  mus.add(5000, 100);
 }
 
 uint8_t ssCnt = 30;
@@ -873,15 +885,7 @@ void loop()
     }
   }
 #endif
-
-  if(toneEnd) // long tone delay
-  {
-    if(millis() >= toneEnd)
-    {
-      toneEnd = 0;
-      analogWrite(TONE, 0);
-    }
-  }
+  mus.service();
 
   switch(display.m_LightSet)
   {
@@ -950,7 +954,7 @@ void loop()
     if(nAlarming) // make noise
     {
       if(--nAlarming)
-        Tone(3000, 500);
+        mus.add(3000, 500);
     }
 
     if(nWrongPass)
@@ -962,10 +966,12 @@ void loop()
       ee.tSecsMon[month()-1] += onCounter;
       onCounter = 0;
     }
+    if(display.m_bHeater == false && nOvershootCnt)
+      nOvershootCnt++;
     static uint16_t s = 1;
     if(ee.bEco && display.m_bHeater) // eco mode
     {
-      bool bBoost = (display.m_currentTemp < display.m_loTemp - ee.pids[2]); // 0.5 deg diff
+      bBoost = (display.m_currentTemp < display.m_loTemp - ee.pids[2]); // 0.5 deg diff
       if(bBoost == false)
       {
         if(--s == 0)
@@ -987,6 +993,14 @@ void loop()
       ee.tSecsMon[month()-1] += onCounter;
       onCounter = 0;
     }
+    if(display.m_bHeater)
+      nHeatCnt++;
+    else
+      nCoolCnt++;
+    if(nHeatETA)
+      nHeatETA--;
+    if(nCoolETA)
+      nCoolETA--;
   }
 
   delay(10);
@@ -1001,6 +1015,8 @@ void setHeat()
 void checkTemp()
 {
   static RunningMedian<uint16_t,32> tempMedian;
+  static RunningMedian<uint32_t,8> heatTimeMedian;
+  static RunningMedian<uint32_t,8> coolTimeMedian;
   static uint8_t state = 0;
 
   switch(state)
@@ -1041,7 +1057,7 @@ void checkTemp()
     display.m_bHeater = false;
     setHeat();
     ws.textAll("alert;Invalid CRC");
-    display.Notification("WARNING\r\nDS18 error");
+    display.Notification("WARNING\r\nDS18 CRC error");
     return;
   }
 
@@ -1061,29 +1077,142 @@ void checkTemp()
   float t;
   tempMedian.getAverage(2, t);
   uint16_t newTemp = t;
-
   static uint16_t oldHT;
-  if(newTemp != display.m_currentTemp || display.m_hiTemp != oldHT)
+
+  if(display.m_currentTemp == 0 || oldHT == 0) // skip first read
   {
     display.m_currentTemp = newTemp;
     oldHT = display.m_hiTemp;
-    sendState();
+    return;
   }
 
-  if(display.m_currentTemp <= display.m_loTemp && display.m_bHeater == false)
+  if(newTemp <= display.m_loTemp && display.m_bHeater == false)
   {
     display.m_bHeater = true;
     setHeat();
-    sendState();
     ta.add();
   }
-  else if(display.m_currentTemp >= display.m_hiTemp && display.m_bHeater == true)
+  else if(newTemp >= display.m_hiTemp && display.m_bHeater == true)
   {
     display.m_bHeater = false;
     setHeat();
-    sendState();
+    nHeatETA = 0;
+    nOvershootCnt = 1;
+    nOvershootStartTemp = newTemp;
     ta.add();
   }
+
+  if(newTemp == display.m_currentTemp && display.m_hiTemp == oldHT)
+    return;
+
+  String s = "print;";
+  s += display.m_bHeater ? "HEAT ETA ": "COOL ETA ";
+
+  int16_t chg = newTemp - display.m_currentTemp;
+
+  if(display.m_bHeater)
+  {
+    if(nHeatCnt > 120 && chg > 0)
+    {
+      if(!ee.bEco || !bBoost) // don't add slower heating
+      {
+        heatTimeMedian.add(nHeatCnt);
+        s += "add ";
+        s += nHeatCnt;
+      }
+      float fCnt;
+      heatTimeMedian.getAverage(fCnt);
+      uint32_t ct = fCnt;
+      s += " ct=";
+      s += ct;
+      int16_t tDiff = display.m_hiTemp - newTemp;
+      nHeatETA = ct * tDiff;
+      int16_t ti = hour()*60+minute() + (nHeatETA / 60);
+      s += " nHeatETA=";
+      s += nHeatETA;
+      s += " ti=";
+      s += ti;
+      s += " tt=";
+      
+      int16_t tt = tempAtTime( ti );
+      s += tt;
+      s += " tDiff=";
+      tDiff = tt - newTemp; // get real target temp
+
+      s += tDiff;
+      s += " ";
+      if(tDiff < 0) tDiff = 0;
+      nHeatETA = ct * tDiff;
+      s += timeFmt(nHeatETA);
+      s += " ct=";
+      s += ct;
+      s += " tDiff=";
+      s += tDiff;
+      ws.textAll(s);
+      nHeatCnt = 0;
+    }
+    else
+    {
+    }
+  }
+  else if(nCoolCnt > 120)
+  {
+    if(chg < 0)
+    {
+      int16_t tDiff = newTemp - display.m_loTemp;
+      coolTimeMedian.add(nCoolCnt);
+      float fCnt;
+      coolTimeMedian.getAverage(fCnt);
+      uint32_t ct = fCnt;
+      nCoolETA = ct * tDiff;
+      s += timeFmt(nCoolETA);
+      nCoolCnt = 0;
+      if(nOvershootPeak)
+      {
+        nOvershootTime = nOvershootPeak;
+        nOvershootTempDiff = nOvershootEndTemp - nOvershootStartTemp;
+
+        if((ee.nOvershootTime==0) || (ee.nOvershootTime && (ee.nOvershootTime / ee.nOvershootTempDiff) < (nOvershootTime / nOvershootTempDiff)) ) // Try to eliminate slosh rise
+        {
+          ee.nOvershootTempDiff = nOvershootTempDiff;
+          ee.nOvershootTime = nOvershootTime;
+          s = " New OverShoot ";
+          s += timeFmt(ee.nOvershootTime);
+          s += " ";
+          s += ee.nOvershootTempDiff;
+        }
+      }
+      ws.textAll(s);
+      nOvershootCnt = 0;
+      nOvershootPeak = 0;
+    }
+    else if(nOvershootCnt) // increasing temp after heater off
+    {
+      nOvershootPeak = nOvershootCnt;
+      nOvershootEndTemp = newTemp;
+    }
+  }
+
+  display.m_currentTemp = newTemp;
+  oldHT = display.m_hiTemp;
+  sendState();
+}
+
+String timeFmt(uint32_t v)
+{
+  String s;
+  uint32_t m = v / 60;
+  uint8_t h = m / 60;
+  m %= 60;
+  v %= 60;
+  s += h;
+  s += ":";
+  if(m < 10) s += "0";
+  s += m;
+  s += ":";
+  if(v < 10) s += "0";
+  s += v;
+  return s;
 }
 
 void sendState()
@@ -1235,25 +1364,66 @@ void checkSched(bool bUpdate)
   }
 }
 
+uint16_t tempAtTime(long timeTo) // in minutes
+{
+  uint8_t idx = ee.schedCnt - 1;
+  uint16_t temp;
+
+  if(ee.bVaca)
+  {
+    return ee.vacaTemp;
+  }
+
+  timeTo %= (24*60);
+
+  for(int i = 0; i < ee.schedCnt; i++) // any time check
+    if(timeTo >= ee.schedule[i].timeSch && timeTo < ee.schedule[i+1].timeSch)
+    {
+      idx = i;
+      break;
+    }
+
+  if(!ee.bAvg) // not averageing mode
+  {
+    return ee.schedule[idx].setTemp;
+  }
+
+  int start = ee.schedule[idx].timeSch;
+  int range;
+  int s2;
+
+  // Find minute range between schedules
+  if(idx == ee.schedCnt - 1) // rollover
+  {
+    s2 = 0;
+    range = ee.schedule[s2].timeSch + (24*60) - start;
+  }
+  else
+  {
+    s2 = idx + 1;
+    range = ee.schedule[s2].timeSch - start;
+  }
+
+  if(timeTo < start) // offset by start of current schedule
+    timeTo -= start - (24*60); // rollover
+  else
+    timeTo -= start;
+  String s = "print; tween ";
+  s += idx;
+  s += " ";
+  s += s2;
+  s += " ";
+  s += timeTo;
+  s += " ";
+  s += range;
+  ws.textAll(s);
+  return tween(ee.schedule[idx].setTemp, ee.schedule[s2].setTemp, timeTo, range);
+}
+
 // avarge value at current minute between times
 int tween(int t1, int t2, int m, int range)
 {
   if(range == 0) range = 1; // div by zero check
   int t = (t2 - t1) * (m * 100 / range) / 100;
   return t + t1;
-}
-
-void Tone(unsigned int frequency, uint32_t duration)
-{
-  analogWriteFreq(frequency);
-  analogWrite(TONE, 500);
-  if(duration <= 20)
-  {
-    delay(duration);
-    analogWrite(TONE, 0);
-  }
-  else // >20ms is handled in loop
-  {
-    toneEnd = millis() + duration;
-  }
 }
