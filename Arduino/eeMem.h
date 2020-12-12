@@ -49,7 +49,9 @@ struct eeSet // EEPROM backed data
   uint8_t  lightIP[2][4];
   uint8_t  resIP[4];
   uint16_t resPort;
-  int8_t res[32];
+  uint32_t nOvershootTime;
+  int16_t nOvershootTempDiff;
+  int8_t res[26];
   Alarm   alarm[MAX_SCHED];
 }; // 620
 
