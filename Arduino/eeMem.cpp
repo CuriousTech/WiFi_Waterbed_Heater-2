@@ -36,6 +36,8 @@ eeSet ee = {
   {{192,168,31,8},{0,0,0,0}}, // lights
   {0,0,0,0}, // extra
   80,
+  0, // overshootTime
+  0,
   {0}, // res
   { // alarms
     {0, 1000, 8*60, 0x3E},
