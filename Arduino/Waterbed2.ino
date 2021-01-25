@@ -1105,9 +1105,6 @@ void checkTemp()
   if(newTemp == display.m_currentTemp && display.m_hiTemp == oldHT)
     return;
 
-  String s = "print;";
-  s += display.m_bHeater ? "HEAT ETA ": "COOL ETA ";
-
   int16_t chg = newTemp - display.m_currentTemp;
 
   if(display.m_bHeater)
@@ -1117,38 +1114,19 @@ void checkTemp()
       if(!ee.bEco || !bBoost) // don't add slower heating
       {
         heatTimeMedian.add(nHeatCnt);
-        s += "add ";
-        s += nHeatCnt;
       }
       float fCnt;
       heatTimeMedian.getAverage(fCnt);
       uint32_t ct = fCnt;
-      s += " ct=";
-      s += ct;
       int16_t tDiff = display.m_hiTemp - newTemp;
       nHeatETA = ct * tDiff;
       int16_t ti = hour()*60+minute() + (nHeatETA / 60);
-      s += " nHeatETA=";
-      s += nHeatETA;
-      s += " ti=";
-      s += ti;
-      s += " tt=";
       
       int16_t tt = tempAtTime( ti );
-      s += tt;
-      s += " tDiff=";
       tDiff = tt - newTemp; // get real target temp
 
-      s += tDiff;
-      s += " ";
       if(tDiff < 0) tDiff = 0;
       nHeatETA = ct * tDiff;
-      s += timeFmt(nHeatETA);
-      s += " ct=";
-      s += ct;
-      s += " tDiff=";
-      s += tDiff;
-      ws.textAll(s);
       nHeatCnt = 0;
     }
     else
@@ -1165,24 +1143,22 @@ void checkTemp()
       coolTimeMedian.getAverage(fCnt);
       uint32_t ct = fCnt;
       nCoolETA = ct * tDiff;
-      s += timeFmt(nCoolETA);
       nCoolCnt = 0;
       if(nOvershootPeak)
       {
         nOvershootTime = nOvershootPeak;
         nOvershootTempDiff = nOvershootEndTemp - nOvershootStartTemp;
 
+        if(ee.nOvershootTempDiff == 0) // fix for divide by 0
+          ee.nOvershootTempDiff = 1;
+        if(nOvershootTempDiff == 0) // fix for divide by 0
+          nOvershootTempDiff = 1;
         if((ee.nOvershootTime==0) || (ee.nOvershootTime && (ee.nOvershootTime / ee.nOvershootTempDiff) < (nOvershootTime / nOvershootTempDiff)) ) // Try to eliminate slosh rise
         {
           ee.nOvershootTempDiff = nOvershootTempDiff;
           ee.nOvershootTime = nOvershootTime;
-          s = " New OverShoot ";
-          s += timeFmt(ee.nOvershootTime);
-          s += " ";
-          s += ee.nOvershootTempDiff;
         }
       }
-      ws.textAll(s);
       nOvershootCnt = 0;
       nOvershootPeak = 0;
     }
@@ -1408,15 +1384,6 @@ uint16_t tempAtTime(long timeTo) // in minutes
     timeTo -= start - (24*60); // rollover
   else
     timeTo -= start;
-  String s = "print; tween ";
-  s += idx;
-  s += " ";
-  s += s2;
-  s += " ";
-  s += timeTo;
-  s += " ";
-  s += range;
-  ws.textAll(s);
   return tween(ee.schedule[idx].setTemp, ee.schedule[s2].setTemp, timeTo, range);
 }
 
