@@ -1,11 +1,11 @@
 #ifndef MUSIC_H
 #define MUSIC_H
 
-#define TONE     15  // Speaker IO
+#define TONE     15  // Speaker IO pin
 
 #include <Arduino.h>
 
-//  Music code and songs at https://github.com/robsoncouto/arduino-songs
+//  More songs and code available at https://github.com/robsoncouto/arduino-songs
 //                                             Robson Couto, 2019
 
 #define NOTE_B0  31
@@ -116,9 +116,11 @@ public:
   void service(void);
   bool play(int song);
 protected:
+  void playNote(int note, int duration);
 #define MUS_LEN 99
   musicArr m_arr[MUS_LEN+1];
-  uint8_t m_idx;
+  int16_t m_idx;
+  int8_t m_volume;
   bool m_bPlaying;
   uint32_t m_toneEnd;
 };
