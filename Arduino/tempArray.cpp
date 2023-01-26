@@ -43,43 +43,36 @@ void TempArray::add()
   m_log[iPos+1].state = 2;  // use 2 as a break between old and new
 }
 
-String TempArray::jsEntry(uint16_t ent)
-{
-  jsonString js;
-
-  if(m_log[ent].state == 2) // now
-  {
-    m_log[ent].min = (hour()*60) + minute();
-    m_log[ent].temp = display.m_currentTemp;
-    m_log[ent].rm = display.m_roomTemp;
-    m_log[ent].rh = display.m_rh;
-  }
-  if(m_log[ent].temp) // only send entries in use
-  {
-    js.Var("tm", m_log[ent].min );
-    js.Var("t", String((float)m_log[ent].temp/10,1) );
-    js.Var("s", m_log[ent].state );
-    js.Var("rm", String((float)m_log[ent].rm/10, 1) );
-    js.Var("rh", String((float)m_log[ent].rh/10, 1) );
-  }
-  return js.Close();
-}
-
 String TempArray::get()
 {
-  String json = "tdata=[";
+  String s = "tdata;{\"temp\":[";
   bool bSent = false;
-  for (int i = 0; i < LOG_CNT-1; ++i)
+
+  for (int ent = 0; ent < LOG_CNT-1; ++ent)
   {
-    if(m_log[i].temp)
+    if(m_log[ent].temp)
     {
-      if(bSent) json += ",";
-      json += jsEntry(i);
+      if(bSent) s += ",";
+      if(m_log[ent].state == 2) // now
+      {
+        m_log[ent].min = (hour()*60) + minute();
+        m_log[ent].temp = display.m_currentTemp;
+        m_log[ent].rm = display.m_roomTemp;
+        m_log[ent].rh = display.m_rh;
+      }
+      s += "[";
+      s += m_log[ent].min;
+      s += ",\""; s += String((float)m_log[ent].temp/10,1); s += "\",";
+      s += m_log[ent].state;
+      s += ",\""; s += String((float)m_log[ent].rm/10, 1); s += "\"";
+      s += ",\""; s += String((float)m_log[ent].rh/10, 1); s += "\"";
+      s += "]";
+
       bSent = true;
     }
   }
-  json += "]";
-  return json;
+  s += "]}";
+  return s;
 }
 
 #define Sch_Left     30
@@ -108,27 +101,27 @@ void TempArray::draw()
 {
   mn = 1000; // get range
   mx = 0;
-  for(uint8_t i = 0; i < ee.schedCnt; i++)
+  for(uint8_t i = 0; i < ee.schedCnt[display.m_season]; i++)
   {
-    if(mn > ee.schedule[i].setTemp) mn = ee.schedule[i].setTemp;
-    if(mx < ee.schedule[i].setTemp) mx = ee.schedule[i].setTemp;
+    if(mn > ee.schedule[display.m_season][i].setTemp) mn = ee.schedule[display.m_season][i].setTemp;
+    if(mx < ee.schedule[display.m_season][i].setTemp) mx = ee.schedule[display.m_season][i].setTemp;
   }
   mn /= 10; mn *= 10; // floor
   mx += (10-(mx%10)); // ciel
   nex.itemText(25, String(mx / 10) );
   nex.itemText(26, String(mn / 10) );
 
-  uint16_t m = Sch_Width - tm2x(ee.schedule[ee.schedCnt-1].timeSch); // wrap line
-  uint16_t r = m + tm2x(ee.schedule[0].timeSch);
-  uint16_t ttl = tween(ee.schedule[ee.schedCnt-1].setTemp, ee.schedule[0].setTemp, m, r); // get y of midnight
+  uint16_t m = Sch_Width - tm2x(ee.schedule[ee.schedCnt[display.m_season]-1][0].timeSch); // wrap line
+  uint16_t r = m + tm2x(ee.schedule[display.m_season][0].timeSch);
+  uint16_t ttl = tween(ee.schedule[display.m_season][ee.schedCnt[display.m_season]-1].setTemp, ee.schedule[display.m_season][0].setTemp, m, r); // get y of midnight
 
   uint16_t x = Sch_Left, x2;
   uint16_t y = t2y(ttl) + Sch_Top, y2;
 
-  for(uint8_t i = 0; i < ee.schedCnt; i++)
+  for(uint8_t i = 0; i < ee.schedCnt[display.m_season]; i++)
   {
-    x2 = tm2x(ee.schedule[i].timeSch) + Sch_Left;
-    y2 = t2y(ee.schedule[i].setTemp) + Sch_Top;
+    x2 = tm2x(ee.schedule[display.m_season][i].timeSch) + Sch_Left;
+    y2 = t2y(ee.schedule[display.m_season][i].setTemp) + Sch_Top;
     nex.line(x, y, x2, y2, rgb16(31, 31, 0) );
     delay(1);
     x = x2;
