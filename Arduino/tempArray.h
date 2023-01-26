@@ -23,7 +23,6 @@ public:
   String get(void);
   void draw(void);
 protected:
-  String jsEntry(uint16_t ent);
   int16_t t2y(uint16_t t);
   uint16_t tm2x(uint16_t t);
   uint16_t tween(uint16_t t1, uint16_t t2, int m, int r);
