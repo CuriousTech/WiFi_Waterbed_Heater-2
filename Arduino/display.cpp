@@ -4,23 +4,21 @@
 #include <TimeLib.h>
 #include <ESP8266mDNS.h> // for WiFi.RSSI()
 #include "eeMem.h"
-#include "WiFiManager.h"
 #include "tempArray.h"
 #include "music.h"
 
 Nextion nex;
-extern WiFiManager wifi;
 extern Music mus;
 extern void changeTemp(int delta, bool bAll);
 extern void CallHost(reportReason r);
-
-extern void ePrint(const char *s);
+extern bool bNotifAck;
+extern void ePrint(String s);
 
 extern TempArray ta;
 
 void Display::init()
 {
-  if(wifi.isCfg() ) // don't interfere with SSID config
+  if(WiFi.status() != WL_CONNECTED) // don't interfere with SSID config
     return;
   nex.FFF(); // Just to end any debug strings in the Nextion
   nex.reset();
@@ -32,7 +30,7 @@ void Display::init()
 // called each second
 void Display::oneSec()
 {
-  if(wifi.isCfg() )
+  if(WiFi.status() != WL_CONNECTED )
     return;
   if(nex.getPage() == Page_Main)
   {
@@ -153,23 +151,32 @@ bool Display::checkNextion() // all the Nextion recieved commands
               m_bNotifVis = false;
               for(int i = 0; i < NOTIFS; i++)
               {
-                if(m_sNotif[i].length())
+                if(m_Notif[i].s.length())
                 {
-                  nex.itemText(18, m_sNotif[i]);
-                  m_sNotif[i] = "";
+                  nex.itemText(18, m_Notif[i].s);
+                  m_sNotifCurr = m_Notif[i].s;
+                  m_Notif[i].s = "";
                   m_bNotifVis = true;
                   break;
                 }
               }
+//              ePrint("print;Clicked");
+
               if(m_bNotifVis == false)
                 nex.visible("t18", 0);
+//              if(m_notifIP[0])
+  //            {
+                bNotifAck = true;
+                CallHost(Reason_Notif);
+    //            m_notifIP[0] = 0;
+      //        }
               break;
           }
           break;
         case Page_Thermostat:
           break;
         case Page_SSID: // Selection page t1=ID 2 ~ t16=ID 17
-          wifi.setSSID(cBuf[2]-2);
+          WiFi.SSID(cBuf[2]-2).toCharArray(ee.szSSID, sizeof(ee.szSSID) );
           nex.refreshItem("t0"); // Just to terminate any debug strings in the Nextion
           nex.setPage(Page_Keyboard); // go to keyboard
           nex.itemText(1, "Enter Password");
@@ -197,11 +204,7 @@ bool Display::checkNextion() // all the Nextion recieved commands
               }
               else m_btnMode = 0;
               break;
-            case 3: case 4: case 5: // hour, minute, Am/Pm
-            case 6: case 7: case 8:
-            case 9: case 10: case 11:
-            case 12: case 13: case 14:
-            case 15: case 16: case 17:
+            case 3 ... 17: // hour, minute, Am/Pm
               s = String("t") + m_almSelect; // change color back
               nex.itemColor(s, rgb16(0, 63, 31));
               m_almSelect = btn - 3;
@@ -209,11 +212,7 @@ bool Display::checkNextion() // all the Nextion recieved commands
               nex.itemColor(s, rgb16(31, 63, 31));
               updateAlarms();
               break;
-            case 19: case 20: case 21: case 22: case 23: case 24: case 25: // checkboxes
-            case 26: case 27: case 28: case 29: case 30: case 31: case 32:
-            case 33: case 34: case 35: case 36: case 37: case 38: case 39:
-            case 40: case 41: case 42: case 43: case 44: case 45: case 46:
-            case 47: case 48: case 49: case 50: case 51: case 52: case 53:
+            case 19 ... 53: // checkboxes
               {
                 uint8_t alm = (btn-19)/7;
                 uint8_t bit = (btn-19)%7;
@@ -283,7 +282,7 @@ bool Display::checkNextion() // all the Nextion recieved commands
           break;
         case 2: // AP password
           nex.setPage(Page_Main);
-          wifi.setPass(cBuf + 1);
+          strcpy(ee.szSSIDPassword, cBuf + 1);
           break;
       }
       screen(true); // back to main page
@@ -333,15 +332,15 @@ void Display::schedUpDown(bool bUp)
     case 0: // name
       break;
     case 1: // hour
-      ee.schedule[m_schedRow].timeSch += (bUp ? 60:-60);
-      ee.schedule[m_schedRow].timeSch %= 1440;
-      s = String(ee.schedule[m_schedRow].timeSch / 60) + ":";
+      ee.schedule[m_season][m_schedRow].timeSch += (bUp ? 60:-60);
+      ee.schedule[m_season][m_schedRow].timeSch %= 1440;
+      s = String(ee.schedule[m_season][m_schedRow].timeSch / 60) + ":";
       nex.itemText(m_schedRow + 5, s );
       break;
     case 2: // minute
-      ee.schedule[m_schedRow].timeSch += (bUp ? 1:-1);
-      ee.schedule[m_schedRow].timeSch %= 1440;
-      m = ee.schedule[m_schedRow].timeSch % 60;
+      ee.schedule[m_season][m_schedRow].timeSch += (bUp ? 1:-1);
+      ee.schedule[m_season][m_schedRow].timeSch %= 1440;
+      m = ee.schedule[m_season][m_schedRow].timeSch % 60;
       s = "";
       if(m < 10) s = "0";
       s += m;
@@ -350,16 +349,16 @@ void Display::schedUpDown(bool bUp)
     case 3: // temp
       nex.refreshItem("s0");
       delay(10); // was 6
-      ee.schedule[m_schedRow].setTemp += (bUp ? 1:-1);
-      ee.schedule[m_schedRow].setTemp = constrain(ee.schedule[m_schedRow].setTemp, 600, 900);
-      nex.itemText(m_schedRow + 15, String((float)ee.schedule[m_schedRow].setTemp/10, 1) );
+      ee.schedule[m_season][m_schedRow].setTemp += (bUp ? 1:-1);
+      ee.schedule[m_season][m_schedRow].setTemp = constrain(ee.schedule[m_season][m_schedRow].setTemp, 600, 900);
+      nex.itemText(m_schedRow + 15, String((float)ee.schedule[m_season][m_schedRow].setTemp/10, 1) );
       ta.draw();
       break;
     case 4: // thresh
 //      nex.refreshItem("s0");
-      ee.schedule[m_schedRow].thresh += (bUp ? 1:-1);
-      ee.schedule[m_schedRow].thresh %= 10;
-      nex.itemText(m_schedRow + 20, String(ee.schedule[m_schedRow].thresh) );
+      ee.schedule[m_season][m_schedRow].thresh += (bUp ? 1:-1);
+      ee.schedule[m_season][m_schedRow].thresh %= 10;
+      nex.itemText(m_schedRow + 20, String(ee.schedule[m_season][m_schedRow].thresh) );
 //      ta.draw();
       break;
     case 5: // all
@@ -367,16 +366,16 @@ void Display::schedUpDown(bool bUp)
       delay(10); // was 4
       for(uint8_t i = 0; i < 5; i++)
       {
-        ee.schedule[i].setTemp += (bUp ? 1:-1);
-        ee.schedule[i].setTemp = constrain(ee.schedule[i].setTemp, 600, 900);
-        nex.itemText(i + 15, String((float)ee.schedule[i].setTemp/10, 1) );
+        ee.schedule[m_season][i].setTemp += (bUp ? 1:-1);
+        ee.schedule[m_season][i].setTemp = constrain(ee.schedule[m_season][i].setTemp, 600, 900);
+        nex.itemText(i + 15, String((float)ee.schedule[m_season][i].setTemp/10, 1) );
       }
       ta.draw();
       break;
   }
 }
 
-void Display::Notification(String s)
+void Display::Notification(String s, IPAddress ip)
 {
   display.screen(true);
   if(m_bNotifVis) // stuff it
@@ -384,7 +383,7 @@ void Display::Notification(String s)
     bool bAdd = true;
     for(int i = 0; i < NOTIFS; i++)
     {
-      if(m_sNotif[i].equals(s))
+      if(m_Notif[i].s.equals(s))
       {
         bAdd = false;
         break;
@@ -392,9 +391,10 @@ void Display::Notification(String s)
     }
     if(bAdd) for(int i = 0; i < NOTIFS; i++)
     {
-      if(m_sNotif[i].length() == 0)
+      if(m_Notif[i].s.length() == 0)
       {
-        m_sNotif[i] = s;
+        m_Notif[i].s = s;
+        m_Notif[i].ip = ip;
         break;
       }
     }
@@ -403,9 +403,26 @@ void Display::Notification(String s)
   {
     nex.visible("t18", 1);
     nex.itemText(18, s);
+    m_sNotifCurr = s;
     m_bNotifVis = true;
+    m_notifIP = ip; // just works if nothing else is displayed
   }
-  mus.add(3000, 200); // notification sound
+  mus.add(3000, 100); // notification sound
+}
+
+void Display::NotificationCancel(String s)
+{
+  for(int i = 0; i < NOTIFS; i++)
+  {
+    if(m_Notif[i].s.equals(s))
+      m_Notif[i].s = "";
+  }
+
+  if(m_bNotifVis == m_sNotifCurr.equals(s))
+  {
+    m_bNotifVis = false;
+    nex.visible("t18", 0);
+  }
 }
 
 void Display::buttonRepeat()
@@ -524,7 +541,7 @@ void Display::refreshAll()
 {
   static int save[12];
 
-  if(nex.getPage() || m_bNotifVis) // not on main page or notification on
+  if(nex.getPage())// || m_bNotifVis) // not on main page or notification on
   {
     save[0] = -1;
     save[5] = -1;
@@ -546,11 +563,6 @@ void Display::refreshAll()
     sTime += " ";
     sTime += day();
     nex.itemText(2, sTime);
-/*  if(weekday() != lastDay)   // update weekday
-  {
-    lastDay = weekday();
-    nex.itemText(7, _days_short[weekday()-1]);
-  }*/
     nex.itemText(13, isPM() ? "PM":"AM");
     nextAlarm();
   }
@@ -597,7 +609,14 @@ void Display::refreshAll()
   if(save[8] != m_schInd)
   {
     save[8] = m_schInd;
-    sTime = ee.bVaca ? "Vacation" : ee.schedule[m_schInd].name;
+    if(ee.bVaca)
+      sTime = "Vacation";
+    else
+    {
+      sTime = _days_short[weekday()-1];
+      sTime += "  ";
+      sTime += String(m_schInd);
+    }
     nex.itemText(12, sTime );
   }
   if(save[9] != m_outTemp)
@@ -661,17 +680,17 @@ void Display::updateAlarms()
 
 void Display::updateSchedule()
 {
-  for(uint8_t i = 0; i < ee.schedCnt && i < 5; i++)
+  for(uint8_t i = 0; i < ee.schedCnt[m_season] && i < 5; i++)
   {
-    nex.itemText(i, ee.schedule[i].name );
-    nex.itemText(i+5, String(ee.schedule[i].timeSch / 60) + ":" );
-    uint8_t sec = ee.schedule[i].timeSch % 60;
+//    nex.itemText(i, ee.schedule[m_season][i].name );
+    nex.itemText(i+5, String(ee.schedule[m_season][i].timeSch / 60) + ":" );
+    uint8_t sec = ee.schedule[m_season][i].timeSch % 60;
     String s = "";
     if(sec < 10) s = "0";
     s += sec;
     nex.itemText(i+10, s );
-    nex.itemText(i+15, String((float)ee.schedule[i].setTemp/10, 1) );
-    nex.itemText(i+20, String(ee.schedule[i].thresh ) );
+    nex.itemText(i+15, String((float)ee.schedule[m_season][i].setTemp/10, 1) );
+    nex.itemText(i+20, String(ee.schedule[m_season][i].thresh ) );
     if(m_schInd == i)
     {
       nex.backColor(String("t")+i, rgb16(12,20,8));
@@ -692,7 +711,7 @@ void Display::updateLevel(uint8_t lvl)
 // false: switch to blank and dim
 bool Display::screen(bool bOn)
 {
-  if(wifi.isCfg() )
+  if(WiFi.status() != WL_CONNECTED )
     return false;
   static bool bOldOn = true;
 
@@ -710,6 +729,8 @@ bool Display::screen(bool bOn)
       nex.setPage(Page_Main);
       delay(25);
     }
+    if(m_bNotifVis)
+      mus.add(3000, 100); // notification sound
     refreshAll();
   }
   else
