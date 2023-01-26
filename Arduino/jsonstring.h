@@ -17,7 +17,7 @@ public:
     return s;
   }
 
-  void Var(char *key, int iVal)
+  void Var(const char *key, int iVal)
   {
     if(m_cnt) s += ",";
     s += "\"";
@@ -27,7 +27,7 @@ public:
     m_cnt++;
   }
 
-  void Var(char *key, uint32_t iVal)
+  void Var(const char *key, uint32_t iVal)
   {
     if(m_cnt) s += ",";
     s += "\"";
@@ -37,7 +37,7 @@ public:
     m_cnt++;
   }
 
-  void Var(char *key, long int iVal)
+  void Var(const char *key, long int iVal)
   {
     if(m_cnt) s += ",";
     s += "\"";
@@ -47,7 +47,7 @@ public:
     m_cnt++;
   }
 
-  void Var(char *key, float fVal)
+  void Var(const char *key, float fVal)
   {
     if(m_cnt) s += ",";
     s += "\"";
@@ -57,7 +57,7 @@ public:
     m_cnt++;
   }
   
-  void Var(char *key, bool bVal)
+  void Var(const char *key, bool bVal)
   {
     if(m_cnt) s += ",";
     s += "\"";
@@ -67,7 +67,7 @@ public:
     m_cnt++;
   }
   
-  void Var(char *key, char *sVal)
+  void Var(const char *key, char *sVal)
   {
     if(m_cnt) s += ",";
     s += "\"";
@@ -78,7 +78,7 @@ public:
     m_cnt++;
   }
   
-  void Var(char *key, String sVal)
+  void Var(const char *key, String sVal)
   {
     if(m_cnt) s += ",";
     s += "\"";
@@ -89,7 +89,7 @@ public:
     m_cnt++;
   }
 
-  void Array(char *key, uint16_t iVal[], int n)
+  void Array(const char *key, uint8_t iVal[], int n)
   {
     if(m_cnt) s += ",";
     s += "\"";
@@ -104,7 +104,22 @@ public:
     m_cnt++;
   }
 
-  void Array(char *key, uint32_t iVal[], int n)
+  void Array(const char *key, uint16_t iVal[], int n)
+  {
+    if(m_cnt) s += ",";
+    s += "\"";
+    s += key;
+    s += "\":[";
+    for(int i = 0; i < n; i++)
+    {
+      if(i) s += ",";
+      s += iVal[i];
+    }
+    s += "]";
+    m_cnt++;
+  }
+
+  void Array(const char *key, uint32_t iVal[], int n)
   {
     if(m_cnt) s += ",";
     s += "\"";
@@ -120,27 +135,33 @@ public:
   }
 
  // custom arrays for waterbed
-  void Array(char *key, Sched sVal[], int n)
+  void Array(const char *key, Sched sVal[][MAX_SCHED], int n)
   {
     if(m_cnt) s += ",";
     s += "\"";
     s += key;
     s += "\":[";
 
-    for(int i = 0; i < n; i++)
+    for(int i2 = 0; i2 < n; i2++)
     {
-      if(i) s += ",";
-      s += "[\"";  s += sVal[i].name; s += "\",";
-      s += sVal[i].timeSch;
-      s += ","; s += String( (float)sVal[i].setTemp/10, 1 );
-      s += ","; s += String( (float)sVal[i].thresh/10,1 );
+      if(i2) s += ",";
+      s += "[";
+      for(int i = 0; i < MAX_SCHED; i++)
+      {
+        if(i) s += ",";
+        s += "[";
+        s += sVal[i2][i].timeSch;
+        s += ","; s += String( (float)sVal[i2][i].setTemp/10, 1 );
+        s += ","; s += String( (float)sVal[i2][i].thresh/10,1 );
+        s += "]";
+      }
       s += "]";
     }
     s += "]";
     m_cnt++;
   }
 
-  void ArrayCost(char *key, uint16_t iVal[], int n)
+  void ArrayCost(const char *key, uint16_t iVal[], int n)
   {
     if(m_cnt) s += ",";
     s += "\"";
