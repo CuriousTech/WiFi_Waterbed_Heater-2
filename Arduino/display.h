@@ -2,12 +2,19 @@
 #define DISPLAY_H
 
 #include <Arduino.h>
+#include <ESPAsyncWebServer.h> // https://github.com/me-no-dev/ESPAsyncWebServer
 
 #define NEX_TIMEOUT  90  // 90 seconds
 #define NEX_BRIGHT   80  // 100% = full brightness
 #define NEX_MEDIUM   10  //
 #define NEX_DIM       1  // very dim
 #define NEX_OFF       0  // off
+
+struct Notif
+{
+  uint32_t ip;
+  String s;
+};
 
 class Display
 {
@@ -21,7 +28,8 @@ public:
   bool isOff(void);
   void updateLevel(uint8_t lvl);
   bool checkAlarms(void);
-  void Notification(String s);
+  void Notification(String s, IPAddress ip);
+  void NotificationCancel(String s);
 
   uint16_t m_roomTemp;
   uint16_t m_rh;
@@ -36,6 +44,7 @@ public:
   uint8_t m_nLightLevel;
   bool m_bLightOn;
   uint8_t m_LightSet;
+  uint8_t m_season;
 private:
   void buttonRepeat(void);
   void nextAlarm(void);
@@ -49,16 +58,18 @@ private:
   void schedUpDown(bool bUp);
 
   uint16_t m_backlightTimer = NEX_TIMEOUT;
-  uint8_t m_btnMode;
-  uint8_t m_btnDelay;
-  bool  m_bSliderDn;
-  uint8_t m_almSelect;
-  uint8_t m_schedRow;
-  uint8_t m_schedCol;
-  uint8_t m_alarmIdx;
-  bool m_bNotifVis;
+  uint8_t m_btnMode = 0;
+  uint8_t m_btnDelay = 0;
+  bool  m_bSliderDn = false;
+  uint8_t m_almSelect =0;
+  uint8_t m_schedRow =0;
+  uint8_t m_schedCol = 0;
+  uint8_t m_alarmIdx = 0;
+  bool m_bNotifVis = false;
+  String m_sNotifCurr;
+  IPAddress m_notifIP;
 #define NOTIFS 10
-  String m_sNotif[NOTIFS];
+  Notif m_Notif[NOTIFS];
 };
 
 enum reportReason
@@ -67,7 +78,7 @@ enum reportReason
   Reason_Switch,
   Reason_Level,
   Reason_Motion,
-  Reason_Test,
+  Reason_Notif,
 };
 
 extern Display display;
