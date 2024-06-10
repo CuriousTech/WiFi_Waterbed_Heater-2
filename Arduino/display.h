@@ -45,6 +45,9 @@ public:
   bool m_bLightOn;
   uint8_t m_LightSet;
   uint8_t m_season;
+  bool m_bNotifVis = false;
+  String m_sNotifCurr;
+
 private:
   void buttonRepeat(void);
   void nextAlarm(void);
@@ -65,8 +68,6 @@ private:
   uint8_t m_schedRow =0;
   uint8_t m_schedCol = 0;
   uint8_t m_alarmIdx = 0;
-  bool m_bNotifVis = false;
-  String m_sNotifCurr;
   IPAddress m_notifIP;
 #define NOTIFS 10
   Notif m_Notif[NOTIFS];
@@ -77,7 +78,6 @@ enum reportReason
   Reason_Setup,
   Reason_Switch,
   Reason_Level,
-  Reason_Motion,
   Reason_Notif,
 };
 
