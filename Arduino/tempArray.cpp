@@ -45,7 +45,7 @@ void TempArray::add()
 
 String TempArray::get()
 {
-  String s = "tdata;{\"temp\":[";
+  String s = "[";
   bool bSent = false;
 
   for (int ent = 0; ent < LOG_CNT-1; ++ent)
@@ -71,8 +71,10 @@ String TempArray::get()
       bSent = true;
     }
   }
-  s += "]}";
-  return s;
+  s += "]";
+  jsonString js("tdata");
+  js.VarNoQ("temp", s);
+  return js.Close();
 }
 
 #define Sch_Left     30
