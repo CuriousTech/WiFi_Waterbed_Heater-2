@@ -112,6 +112,12 @@ const int melody_imperial[] = {
   
 };
 
+void Music::init()
+{
+  pinMode(SPEAKER, OUTPUT);
+  digitalWrite(SPEAKER, LOW);
+}
+
 bool Music::add(uint16_t note, uint16_t delay)
 {
   if(m_bPlaying)
@@ -134,13 +140,16 @@ void Music::playNote(int note, int duration)
 {
     if(note)
     {
+#ifdef ESP32
+      analogWriteFrequency(SPEAKER, note);
+#else
       analogWriteFreq(note);
-      analogWrite(TONE, 40);
-      m_volume = 39;
+#endif
+      analogWrite(SPEAKER, m_volume = 30);
     }
     else
     {
-      analogWrite(TONE, 0);      
+      analogWrite(SPEAKER, 0);
       m_volume = 0;
     } 
     m_toneEnd = millis() + duration;
@@ -214,16 +223,16 @@ void Music::service()
     return;
   else if(millis() >= m_toneEnd)
   {
-    analogWrite(TONE, 0);
+    analogWrite(SPEAKER, 0);
     m_toneEnd = 0;
     m_bPlaying = false;
   }
   else
   {
-    if(m_volume > 1)
+    if(m_volume > 2)
     {
-      analogWrite(TONE, m_volume);
-      m_volume--;
+      analogWrite(SPEAKER, m_volume);
+      m_volume -= 2;
     }
     return;
   }
