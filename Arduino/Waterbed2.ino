@@ -65,7 +65,7 @@
 #error "network type must be ESP8266 ASYNC!"
 #endif
 
-const char controlPassword[] = "esp8266ct";    // device password for modifying any settings
+const char controlPassword[] = "password";    // device password for modifying any settings
 const int serverPort = 80;                    // HTTP port
 const char hostName[] = "WaterbedM2";
 #define WBID 0x4254574d // Sensor ID for thermostat MWTB   0x42545747 = GWTB
