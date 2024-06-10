@@ -1,10 +1,19 @@
 #include "eeMem.h"
+
+#ifdef ESP32
+#include <Preferences.h>
+Preferences prefs;
+#else
 #include <EEPROM.h>
+#endif
 
-
-eeMem::eeMem()
+void eeMem::init()
 {
+#ifdef ESP32
+  prefs.begin("my-app", false);
+#else
   EEPROM.begin(EESIZE);
+#endif
   verify(false);
 }
 
@@ -23,11 +32,15 @@ bool eeMem::update(bool bForce) // write the settings if changed
   ee.sum = Fletcher16((uint8_t*)this + offsetof(eeMem, size), EESIZE );
 
   uint8_t *pData = (uint8_t *)this + offsetof(eeMem, size);
+#ifdef ESP32
+  prefs.putBytes("Config", pData, EESIZE);
+#else
   for(int addr = 0; addr < EESIZE; addr++)
   {
     EEPROM.write(addr, pData[addr] );
   }
   EEPROM.commit();
+#endif
   return true;
 }
 
@@ -36,10 +49,14 @@ bool eeMem::verify(bool bComp)
   uint8_t data[EESIZE];
   uint16_t *pwTemp = (uint16_t *)data;
 
+#ifdef ESP32
+  prefs.getBytes("Config", data, EESIZE);
+#else
   for(int addr = 0; addr < EESIZE; addr++)
   {
     data[addr] = EEPROM.read( addr );
   }
+#endif
   if(pwTemp[0] != EESIZE)
     return false; // revert to defaults if struct size changes
 
