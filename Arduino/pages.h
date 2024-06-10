@@ -40,17 +40,14 @@ debug=false
 cf='F'
 function openSocket(){
 ws=new WebSocket("ws://"+window.location.host+"/ws")
-//ws=new WebSocket("ws://192.168.31.116/ws")
+//ws=new WebSocket("ws://192.168.31.74/ws")
 ws.onopen=function(evt){}
 ws.onclose=function(evt){alert("Connection closed.");}
 ws.onmessage=function(evt){
-console.log(evt.data)
- lines=evt.data.split(';')
- event=lines[0]
- data=lines[1]
- if(event=='state')
+ console.log(evt.data)
+ d=JSON.parse(evt.data)
+ if(d.cmd=='state')
  {
-  d=JSON.parse(data)
   dt=new Date(d.t*1000)
   a.time.innerHTML=dt.toLocaleTimeString()
   waterTemp=+d.waterTemp
@@ -62,9 +59,8 @@ console.log(evt.data)
 //  if(eta==0) eta=+d.cooleta
   a.eta.innerHTML='ETA '+t2hms(eta)
  }
- else if(event=='set')
+ else if(d.cmd=='set')
  {
-  d=JSON.parse(data)
   a.vt.value=+d.vt
   oledon=d.o
   a.OLED.value=oledon?'ON ':'OFF'
@@ -77,35 +73,26 @@ console.log(evt.data)
   a.eco.value=d.e?'ON ':'OFF'
   eco=d.e
   watts=d.w
-  cnt=d.cnt[d.season]
   idx=d.idx
-  itms=d.item[d.season]
-  for(i=0;i<8;i++){
-   item=document.getElementById('r'+i); item.setAttribute('style',i<cnt?'':'display:none')
-   if(i==idx) item.setAttribute('style','background-color:red')
-   h=itms[i][0]/60
-   m=itms[i][0]%60
-   if(m<10) m='0'+m
-   document.getElementById('S'+i).value=h+':'+m
-   document.getElementById('T'+i).value=itms[i][1]
-   document.getElementById('H'+i).value=itms[i][2]
-   document.getElementById('S'+i).onchange=function(){onChangeSched(this)}
-   document.getElementById('T'+i).onchange=function(){onChangeSched(this)}
-   document.getElementById('H'+i).onchange=function(){onChangeSched(this)}
-  }
-  a.inc.value=Math.min(8,cnt+1)
-  a.dec.value=Math.max(1,cnt-1)
+  schedules=d.item
+  schedCnt=d.cnt
+  setSeason(d.season)
   draw_bars(d.ts,d.ppkwm)
  }
- else if(event=='tdata')
+ else if(d.cmd=='tdata')
  {
-  d=JSON.parse(data)
   tdata=d.temp
   draw()
  }
- else if(event=='alert')
+ else if(d.cmd=='radar')
  {
-  alert(data)
+   a.pres.innerHTML=' Presnece:'+d.pres
+  a.dist.innerHTML=' Distance:'+d.dist
+  a.energy.innerHTML=' Energy:'+d.energy
+ }
+ else if(d.cmd=='alert')
+ {
+  alert(d.data)
  }
 }
 }
@@ -123,9 +110,33 @@ function onChangeSched(ent)
  setVar(id,val)
  draw()
 }
+function setSeason(s)
+{
+  seasEdit=s
+  for(i=0;i<4;i++)
+    document.getElementById('s'+i).setAttribute('style',(i==seasEdit)?'background-color:red':'none')
+  itms=schedules[seasEdit]
+  cnt=schedCnt[seasEdit]
+  for(i=0;i<8;i++){
+   item=document.getElementById('r'+i); item.setAttribute('style',i<cnt?'':'display:none')
+   if(i==idx) item.setAttribute('style','background-color:red')
+   h=Math.floor(itms[i][0]/60)
+   m=itms[i][0]%60
+   if(m<10) m='0'+m
+   document.getElementById('S'+i).value=h+':'+m
+   document.getElementById('T'+i).value=itms[i][1]
+   document.getElementById('H'+i).value=itms[i][2]
+   document.getElementById('S'+i).onchange=function(){onChangeSched(this)}
+   document.getElementById('T'+i).onchange=function(){onChangeSched(this)}
+   document.getElementById('H'+i).onchange=function(){onChangeSched(this)}
+  }
+  a.inc.value=Math.min(8,cnt+1)
+  a.dec.value=Math.max(1,cnt-1)
+}
+
 function setVar(varName, value)
 {
- ws.send('cmd;{"key":"'+a.myKey.value+'","'+varName+'":'+value+'}')
+ ws.send('{"key":"'+a.myKey.value+'","'+varName+'":'+value+'}')
 }
 function oled(){
 setVar('oled',oledon?0:1)
@@ -461,8 +472,7 @@ function draw_scale(ar,pp,w,h,o,p,ct)
     }
     bh=+bh.toFixed()+5
     x=+x.toFixed()
-    if(pp[i]==0) pp[i]=ppkw*1000
-    cost=+((pp[i]/1000)*ar[i]*(watts/3600000)).toFixed(2)
+    cost=+(ppkw*ar[i]*(watts/3600000)).toFixed(2)
     costTot+=cost
     if(ar[i])
       dots.push({
@@ -472,7 +482,7 @@ function draw_scale(ar,pp,w,h,o,p,ct)
       x2: x+lw/2,
       tip: t2hms(ar[i]),
       tip2: '$'+cost,
-      tip3: '@ $'+pp[i]/1000
+      tip3: '@ $'+ppkw
     })
   }
   ctx.fillText((tot*watts/3600000).toFixed(1)+' KWh',w/2,o+10)
@@ -533,14 +543,14 @@ openSocket()
 <td><input type='button' value='Up' onclick="{setTemp(1)}"> <input type='button' value='All Up' onclick="{setAllTemp(1)}"><br><input type='button' value='Dn' onclick="{setTemp(-1)}"> <input type='button' value='All Dn' onclick="{setAllTemp(-1)}"></td></tr>
 <tr>
 <td align="left"></td><td>Time &nbsp;&nbsp;</td><td>Temp &nbsp;Thresh</td>
-<tr><td colspan=3 id='r0' style="display:none"><input id=S0 type=text size=3> <input id=T0 type=text size=3> <input id=H0 type=text size=2></td></tr>
-<tr><td colspan=3 id='r1' style="display:none"><input id=S1 type=text size=3> <input id=T1 type=text size=3> <input id=H1 type=text size=2></td></tr>
-<tr><td colspan=3 id='r2' style="display:none"><input id=S2 type=text size=3> <input id=T2 type=text size=3> <input id=H2 type=text size=2></td></tr>
-<tr><td colspan=3 id='r3' style="display:none"><input id=S3 type=text size=3> <input id=T3 type=text size=3> <input id=H3 type=text size=2></td></tr>
-<tr><td colspan=3 id='r4' style="display:none"><input id=S4 type=text size=3> <input id=T4 type=text size=3> <input id=H4 type=text size=2></td></tr>
-<tr><td colspan=3 id='r5' style="display:none"><input id=S5 type=text size=3> <input id=T5 type=text size=3> <input id=H5 type=text size=2></td></tr>
-<tr><td colspan=3 id='r6' style="display:none"><input id=S6 type=text size=3> <input id=T6 type=text size=3> <input id=H6 type=text size=2></td></tr>
-<tr><td colspan=3 id='r7' style="display:none"><input id=S7 type=text size=3> <input id=T7 type=text size=3> <input id=H7 type=text size=2></td></tr>
+<tr><td id="s0"><input type="button" style="width:80px" value="Spring" onClick="{setSeason(0)}"></td><td colspan=2 id='r0' style="display:none"><input id=S0 type=text size=3> <input id=T0 type=text size=3> <input id=H0 type=text size=2></td></tr>
+<tr><td id="s1"><input type="button" style="width:80px" value="Summer" onClick="{setSeason(1)}"></td><td colspan=2 id='r1' style="display:none"><input id=S1 type=text size=3> <input id=T1 type=text size=3> <input id=H1 type=text size=2></td></tr>
+<tr><td id="s2"><input type="button" style="width:80px" value="Fall" onClick="{setSeason(2)}"></td><td colspan=2 id='r2' style="display:none"><input id=S2 type=text size=3> <input id=T2 type=text size=3> <input id=H2 type=text size=2></td></tr>
+<tr><td id="s3"><input type="button" style="width:80px" value="Winter" onClick="{setSeason(3)}"></td><td colspan=2 id='r3' style="display:none"><input id=S3 type=text size=3> <input id=T3 type=text size=3> <input id=H3 type=text size=2></td></tr>
+<tr><td></td><td colspan=2 id='r4' style="display:none"><input id=S4 type=text size=3> <input id=T4 type=text size=3> <input id=H4 type=text size=2></td></tr>
+<tr><td></td><td colspan=2 id='r5' style="display:none"><input id=S5 type=text size=3> <input id=T5 type=text size=3> <input id=H5 type=text size=2></td></tr>
+<tr><td></td><td colspan=2 id='r6' style="display:none"><input id=S6 type=text size=3> <input id=T6 type=text size=3> <input id=H6 type=text size=2></td></tr>
+<tr><td></td><td colspan=2 id='r7' style="display:none"><input id=S7 type=text size=3> <input id=T7 type=text size=3> <input id=H7 type=text size=2></td></tr>
 <tr><td colspan=3><canvas id="canva" width="300" height="140" style="border:1px dotted;float:center" onclick="draw()"></canvas></td></tr>
 <tr><td colspan=3>
 <div id="wrapper">
@@ -550,6 +560,8 @@ openSocket()
 </td></tr>
 <tr><td colspan=2 align="left">PPKWH $<input id='K' type=text size=2 value='0.1457' onchange="{setPPK()}">
  </td><td> <input id="myKey" name="key" type=text size=40 placeholder="password" style="width: 100px" onChange="{localStorage.setItem('key', key = document.all.myKey.value)}"></td></tr>
+
+<tr><td id="pres"></td><td id="dist"></td><td id="energy"></td></tr>
 </table>
 </body>
 </html>
