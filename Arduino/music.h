@@ -1,7 +1,11 @@
 #ifndef MUSIC_H
 #define MUSIC_H
 
-#define TONE     15  // Speaker IO pin
+#ifdef ESP32
+#define SPEAKER   40  // Speaker IO pin
+#else
+#define SPEAKER   15
+#endif
 
 #include <Arduino.h>
 
@@ -109,9 +113,8 @@ class Music
 public:
   Music()
   {
-    pinMode(TONE, OUTPUT);
-    digitalWrite(TONE, LOW);
   }
+  void init(void);
   bool add(uint16_t note, uint16_t delay);
   void service(void);
   bool play(int song);
