@@ -2,7 +2,11 @@
 #include "Nextion.h"
 #include <ESPAsyncWebServer.h> // https://github.com/me-no-dev/ESPAsyncWebServer
 #include <TimeLib.h>
+#ifdef ESP32
+#include <ESPmDNS.h>
+#else
 #include <ESP8266mDNS.h> // for WiFi.RSSI()
+#endif
 #include "eeMem.h"
 #include "tempArray.h"
 #include "music.h"
@@ -12,14 +16,11 @@ extern Music mus;
 extern void changeTemp(int delta, bool bAll);
 extern void CallHost(reportReason r);
 extern bool bNotifAck;
-extern void ePrint(String s);
 
 extern TempArray ta;
 
 void Display::init()
 {
-  if(WiFi.status() != WL_CONNECTED) // don't interfere with SSID config
-    return;
   nex.FFF(); // Just to end any debug strings in the Nextion
   nex.reset();
   screen( true ); // brighten the screen if it just reset
@@ -30,8 +31,6 @@ void Display::init()
 // called each second
 void Display::oneSec()
 {
-  if(WiFi.status() != WL_CONNECTED )
-    return;
   if(nex.getPage() == Page_Main)
   {
     refreshAll();    // time update every seconds
@@ -160,8 +159,6 @@ bool Display::checkNextion() // all the Nextion recieved commands
                   break;
                 }
               }
-//              ePrint("print;Clicked");
-
               if(m_bNotifVis == false)
                 nex.visible("t18", 0);
 //              if(m_notifIP[0])
@@ -421,6 +418,7 @@ void Display::NotificationCancel(String s)
   if(m_bNotifVis == m_sNotifCurr.equals(s))
   {
     m_bNotifVis = false;
+    m_sNotifCurr = "";
     nex.visible("t18", 0);
   }
 }
