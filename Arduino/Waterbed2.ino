@@ -29,8 +29,12 @@
 
 #include <Wire.h>
 #include <EEPROM.h>
-#include <ESP8266mDNS.h>
 #include <ESPAsyncWebServer.h> // https://github.com/me-no-dev/ESPAsyncWebServer
+#ifdef ESP32
+#include <ESPmDNS.h>
+#else
+#include <ESP8266mDNS.h>
+#endif
 #ifdef OTA_ENABLE
 #include <FS.h>
 #include <ArduinoOTA.h>
@@ -50,20 +54,43 @@
 #include <JsonClient.h>
 #include <SHT21.h> // https://github.com/CuriousTech/ESP8266-HVAC/tree/master/Libraries/SHT21
 #include "jsonstring.h"
+#include "uriString.h"
 #include "display.h"
 #include "tempArray.h"
 #include "music.h"
 
 #include <WebSocketsClient.h> // https://github.com/Links2004/arduinoWebSockets
 //switch WEBSOCKETS_NETWORK_TYPE to NETWORK_ESP8266_ASYNC in WebSockets.h
-#if (WEBSOCKETS_NETWORK_TYPE != NETWORK_ESP8266_ASYNC)
+#if defined(ESP8266) && (WEBSOCKETS_NETWORK_TYPE != NETWORK_ESP8266_ASYNC)
 #error "network type must be ESP8266 ASYNC!"
 #endif
 
-const char controlPassword[] = "password";    // device password for modifying any settings
+const char controlPassword[] = "esp8266ct";    // device password for modifying any settings
 const int serverPort = 80;                    // HTTP port
-const char hostName[] = "Waterbed";
+const char hostName[] = "WaterbedM2";
 #define WBID 0x4254574d // Sensor ID for thermostat MWTB   0x42545747 = GWTB
+
+#ifdef ESP32
+
+#define BTN      0 //  top
+#define SDA      8
+#define SCL      9
+#define HEAT     11  // Heater output
+#define DS18B20  12
+#define MOTION   14  // PIR/mmWave sensor
+#define RADAR_TX 16
+#define RADAR_RX 17
+#define TONE     40  // Speaker.  Beeps on powerup, but can also be controlled by another IoT or add an alarm clock.
+#define ENC_A    26
+#define ENC_B    33
+
+#include <ld2410.h> // from Library Manager in Arduino IDE
+#define RADAR_SERIAL Serial1
+ld2410 radar;
+uint32_t lastReading = 0;
+bool radarConnected = false;
+
+#else
 
 #define BTN      0 //  top
 #define ENC_A    2
@@ -72,9 +99,11 @@ const char hostName[] = "Waterbed";
 #define SCL      5
 #define HEAT     12  // Heater output
 #define DS18B20  13
-#define MOTION   14  // PIR sensor
-#define TONE     15  // Speaker.  Beeps on powerup, but can also be controlled by aother IoT or add an alarm clock.
+#define MOTION   14  // PIR/mmWave sensor
+#define TONE     15  // Speaker.  Beeps on powerup, but can also be controlled by another IoT or add an alarm clock.
 #define ENC_B    16
+
+#endif
 
 TempArray ta;
 Music mus;
@@ -93,7 +122,7 @@ eeMem ee;
 AsyncWebServer server( serverPort );
 AsyncWebSocket ws("/ws"); // access at ws://[esp ip]/ws
 
-UdpTime utime;
+UdpTime udptime;
 
 bool bCF = false;
 
@@ -120,9 +149,9 @@ bool bConfigDone = false;
 bool bStarted = false;
 uint32_t connectTimer;
 
-void jsonCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue);
+void jsonCallback(int16_t iName, int iValue, char *psValue);
 JsonParse jsonParse(jsonCallback);
-void jsonPushCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue);
+void jsonPushCallback(int16_t iName, int iValue, char *psValue);
 JsonClient jsonPush(jsonPushCallback);
 
 bool updateAll(bool bForce)
@@ -134,7 +163,7 @@ String dataJson()
 {
   jsonString js("state");
 
-  js.Var("t", (uint32_t)(now() - ((ee.tz + utime.getDST()) * 3600)) );
+  js.Var("t", (uint32_t)(now() - ((ee.tz + udptime.getDST()) * 3600)) );
   js.Var("waterTemp", String((float)display.m_currentTemp / 10, 1) );
   js.Var("setTemp", String((float)ee.schedule[display.m_season][display.m_schInd].setTemp / 10, 1) );
   js.Var("hiTemp",  String((float)display.m_hiTemp / 10, 1) );
@@ -148,6 +177,7 @@ String dataJson()
   js.Var("eta",  nHeatETA);
   js.Var("cooleta",  nCoolETA);
   js.Var("notif",  bNotifAck);
+  js.Var("pin", digitalRead(MOTION));
   bNotifAck = false;
   return js.Close();
 }
@@ -163,28 +193,24 @@ String setJson() // settings
   js.Var("ppkwh", ee.ppkwh);
   js.Var("vo",  ee.bVaca);
   js.Var("idx", display.m_schInd);
-  js.Array("cnt", ee.schedCnt, 2);
+  js.Array("cnt", ee.schedCnt, 4);
   js.Var("w",  ee.watts);
   js.Var("r",  ee.rate);
   js.Var("e",  ee.bEco);
   js.Var("season", display.m_season);
   IPAddress hip(ee.hostIP);
   IPAddress lip(ee.lightIP[0]);
+  IPAddress fip(ee.lightIP[1]);
   js.Var("hip", hip.toString());
   js.Var("lip", lip.toString());
-  js.Array("item", ee.schedule, 2);
+  js.Var("fip", fip.toString());
+  js.Array("item", ee.schedule, 4);
+  js.Array("seasonDays", ee.scheduleDays, 4);
   js.Array("ts", ee.tSecsMon, 12);
-  js.Array("ppkwm", ee.ppkwm, 12);
   return js.Close();
 }
 
-void ePrint(String s)
-{
-  ws.textAll(s);
-}
-
 const char *jsonListCmd[] = {
-  "cmd",
   "key",
   "oled",
   "TZ",
@@ -235,7 +261,7 @@ void parseParams(AsyncWebServerRequest *request)
     String s = request->urlDecode(p->value());
 
     uint8_t idx;
-    for (idx = 1; jsonListCmd[idx]; idx++)
+    for (idx = 0; jsonListCmd[idx]; idx++)
       if ( p->name().equals(jsonListCmd[idx]) )
         break;
     if (jsonListCmd[idx] == NULL)
@@ -243,11 +269,11 @@ void parseParams(AsyncWebServerRequest *request)
     int iValue = s.toInt();
     if (s == "true") iValue = 1;
 
-    jsonCallback(0, idx - 1, iValue, (char *)s.c_str());
+    jsonCallback(idx, iValue, (char *)s.c_str());
   }
 }
 
-void jsonCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
+void jsonCallback(int16_t iName, int iValue, char *psValue)
 {
   if (!bKeyGood && iName)
   {
@@ -258,146 +284,139 @@ void jsonCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
     return; // only allow for key
   }
   char *p, *p2;
-  static int beepPer = 1000;
   static int item = 0;
 
-  switch (iEvent)
+  switch (iName)
   {
-    case 0: // cmd
-      switch (iName)
-      {
-        case 0: // key
-          if (!strcmp(psValue, controlPassword)) // first item must be key
-            bKeyGood = true;
-          break;
-        case 1: // OLED
-          display.screen(true);
-          break;
-        case 2: // TZ
-          ee.tz = iValue;
-          utime.start();
-          break;
-        case 3: // avg
-          ee.bAvg = iValue;
-          break;
-        case 4: // cnt
-          ee.schedCnt[display.m_season] = constrain(iValue, 1, 8);
-          ws.textAll(setJson()); // update all the entries
-          break;
-        case 5: // tadj
-          changeTemp(iValue, false);
-          ws.textAll(setJson()); // update all the entries
-          break;
-        case 6: // ppkw
-          ee.ppkwm[month() - 1] = ee.ppkwh = iValue;
-          break;
-        case 7: // vaca
-          ee.bVaca = iValue;
-          break;
-        case 8: // vacatemp
-          if (bCF)
-            ee.vacaTemp = constrain( (int)(atof(psValue) * 10), 100, 290); // 10-29C
-          else
-            ee.vacaTemp = constrain( (int)(atof(psValue) * 10), 600, 840); // 60-84F
-          break;
-        case 9: // I
-          item = iValue;
-          break;
-        case 10: // N
-          break;
-        case 11: // S
-          p = strtok(psValue, ":");
-          p2 = strtok(NULL, "");
-          if (p && p2) {
-            iValue *= 60;
-            iValue += atoi(p2);
-          }
-          ee.schedule[display.m_season][item].timeSch = iValue;
-          break;
-        case 12: // T
-          ee.schedule[display.m_season][item].setTemp = atof(psValue) * 10;
-          break;
-        case 13: // H
-          ee.schedule[display.m_season][item].thresh = (int)(atof(psValue) * 10);
-          checkLimits();      // constrain and check new values
-          checkSched(true);   // reconfigure to new schedule
-          break;
-        case 14: // vibe (vibe period)
-#ifdef VIBE
-          vibePeriod = iValue;
-          vibeCnt = 1;
-          pinMode(VIBE, OUTPUT);
-          digitalWrite(VIBE, LOW);
-#endif
-          break;
-        case 15: // watts
-          ee.watts = iValue;
-          break;
-        case 16: // dot displayOnTimer
-          if (iValue)
-            display.screen(true);
-          break;
-        case 17: // save
-          updateAll(true);
-          break;
-        case 18: // aadj
-          changeTemp(iValue, true);
-          ws.textAll(setJson()); // update all the entries
-          break;
-        case 19: // eco
-          ee.bEco = iValue ? true : false;
-          setHeat();
-          break;
-        case 20: // outtemp
-          display.m_outTemp = iValue;
-          break;
-        case 21: // outrh
-          display.m_outRh = iValue;
-          break;
-        case 22: // notif
-          display.Notification(psValue, lastIP);
-          break;
-        case 23: // notifCancel
-          display.NotificationCancel(psValue);
-          break;
-        case 24: // rate
-          if (iValue == 0)
-            break; // don't allow 0
-          ee.rate = iValue;
-          sendState();
-          break;
-        case 25: // host IP / port  (call from host with ?h=80)
-          ee.hostIP[0] = lastIP[0];
-          ee.hostIP[1] = lastIP[1];
-          ee.hostIP[2] = lastIP[2];
-          ee.hostIP[3] = lastIP[3];
-          ee.hostPort = iValue ? iValue : 80;
-          break;
-        case 26: // lightIP
-          {
-            IPAddress ip;
-            ip.fromString(psValue);
-            ee.lightIP[0][0] = ip[0];
-            ee.lightIP[0][1] = ip[1];
-            ee.lightIP[0][2] = ip[2];
-            ee.lightIP[0][3] = ip[3];
-          }
-          break;
-        case 27: // music
-          mus.play(iValue);
-          break;
-        case 28: // send
-          bTxTemp = iValue ? true : false;
-          break;
-        case 29: // restart
-          ESP.reset();
-          break;
+    case 0: // key
+      if (!strcmp(psValue, controlPassword)) // first item must be key
+        bKeyGood = true;
+      break;
+    case 1: // OLED
+      display.screen(true);
+      break;
+    case 2: // TZ
+      ee.tz = iValue;
+      udptime.start();
+      break;
+    case 3: // avg
+      ee.bAvg = iValue;
+      break;
+    case 4: // cnt
+      ee.schedCnt[display.m_season] = constrain(iValue, 1, 8);
+      ws.textAll(setJson()); // update all the entries
+      break;
+    case 5: // tadj
+      changeTemp(iValue, false);
+      ws.textAll(setJson()); // update all the entries
+      break;
+    case 6: // ppkw
+      ee.ppkwh = iValue;
+      break;
+    case 7: // vaca
+      ee.bVaca = iValue;
+      break;
+    case 8: // vacatemp
+      if (bCF)
+        ee.vacaTemp = constrain( (int)(atof(psValue) * 10), 100, 290); // 10-29C
+      else
+        ee.vacaTemp = constrain( (int)(atof(psValue) * 10), 600, 840); // 60-84F
+      break;
+    case 9: // I
+      item = iValue;
+      break;
+    case 10: // N
+      break;
+    case 11: // S
+      p = strtok(psValue, ":");
+      p2 = strtok(NULL, "");
+      if (p && p2) {
+        iValue *= 60;
+        iValue += atoi(p2);
       }
+      ee.schedule[display.m_season][item].timeSch = iValue;
+      break;
+    case 12: // T
+      ee.schedule[display.m_season][item].setTemp = atof(psValue) * 10;
+      break;
+    case 13: // H
+      ee.schedule[display.m_season][item].thresh = (int)(atof(psValue) * 10);
+      checkLimits();      // constrain and check new values
+      checkSched(true);   // reconfigure to new schedule
+      break;
+    case 14: // vibe (vibe period)
+      break;
+    case 15: // watts
+      ee.watts = iValue;
+      break;
+    case 16: // dot displayOnTimer
+      if (iValue)
+        display.screen(true);
+      break;
+    case 17: // save
+      updateAll(true);
+      break;
+    case 18: // aadj
+      changeTemp(iValue, true);
+      ws.textAll(setJson()); // update all the entries
+      break;
+    case 19: // eco
+      ee.bEco = iValue ? true : false;
+      setHeat();
+      break;
+    case 20: // outtemp
+      display.m_outTemp = iValue;
+      break;
+    case 21: // outrh
+      display.m_outRh = iValue;
+      break;
+    case 22: // notif
+      display.Notification(psValue, lastIP);
+      break;
+    case 23: // notifCancel
+      display.NotificationCancel(psValue);
+      break;
+    case 24: // rate
+      if (iValue == 0)
+        break; // don't allow 0
+      ee.rate = iValue;
+      sendState();
+      break;
+    case 25: // host IP / port  (call from host with ?h=80)
+      ee.hostIP[0] = lastIP[0];
+      ee.hostIP[1] = lastIP[1];
+      ee.hostIP[2] = lastIP[2];
+      ee.hostIP[3] = lastIP[3];
+      ee.hostPort = iValue ? iValue : 80;
+      break;
+    case 26: // lightIP
+      {
+        IPAddress ip;
+        ip.fromString(psValue);
+        ee.lightIP[0][0] = ip[0];
+        ee.lightIP[0][1] = ip[1];
+        ee.lightIP[0][2] = ip[2];
+        ee.lightIP[0][3] = ip[3];
+      }
+      break;
+    case 27: // music
+      mus.play(iValue);
+      break;
+    case 28: // send
+      bTxTemp = iValue ? true : false;
+      break;
+    case 29: // restart
+#ifdef ESP32
+      ESP.restart();
+#else
+      ESP.reset();
+#endif
       break;
   }
 }
 
-void handleS(AsyncWebServerRequest *request) { // standard params, but no page
+void handleS(AsyncWebServerRequest *request) // standard params, but no page
+{
   parseParams(request);
 
   jsonString js;
@@ -408,7 +427,6 @@ void handleS(AsyncWebServerRequest *request) { // standard params, but no page
 }
 
 const char *jsonListPush[] = {
-  "time",
   "time", // 0
   "ppkw",
   "on",
@@ -416,30 +434,23 @@ const char *jsonListPush[] = {
   NULL
 };
 
-void jsonPushCallback(int16_t iEvent, uint16_t iName, int iValue, char *psValue)
+void jsonPushCallback(int16_t iName, int iValue, char *psValue)
 {
-  switch (iEvent)
+  switch (iName)
   {
-    case -1: // status
-      break;
     case 0: // time
-      switch (iName)
-      {
-        case 0: // time
-          if (iValue < now() + ((ee.tz + utime.getDST()) * 3600) )
-            break;
-          setTime(iValue + ( (ee.tz + utime.getDST() ) * 3600));
-          break;
-        case 1: // ppkw
-          ee.ppkwm[month() - 1] = ee.ppkwh = iValue;
-          break;
-        case 2: // on
-          display.m_bLightOn = iValue ? true : false;
-          break;
-        case 3: // level
-          display.updateLevel(iValue);
-          break;
-      }
+      if (iValue < now() + ((ee.tz + udptime.getDST()) * 3600) )
+        break;
+      setTime(iValue + ( (ee.tz + udptime.getDST() ) * 3600));
+      break;
+    case 1: // ppkw
+      ee.ppkwh = iValue;
+      break;
+    case 2: // on
+      display.m_bLightOn = iValue ? true : false;
+      break;
+    case 3: // level
+      display.updateLevel(iValue);
       break;
   }
 }
@@ -466,7 +477,7 @@ void checkQueue()
 
   if ( jsonPush.begin(queue[qIdx].ip, queue[qIdx].sUri.c_str(), queue[qIdx].port, false, false, NULL, NULL, 1) )
   {
-    jsonPush.addList(jsonListPush);
+    jsonPush.setList(jsonListPush);
     queue[qIdx].port = 0;
     if (++qIdx >= CQ_CNT)
       qIdx = 0;
@@ -491,47 +502,54 @@ void CallHost(reportReason r)
   if (ee.hostIP[0] == 0) // no host set
     return;
 
-  String sUri = String("/wifi?name=\"");
-  sUri += hostName;
-  sUri += "\"&reason=";
+  uriString uri("/wifi");
+  uri.Param("name", hostName);
 
   switch (r)
   {
     case Reason_Setup:
-      sUri += "setup&port="; sUri += serverPort;
-      sUri += "&on=1";
-      break;
-    case Reason_Motion:
-      sUri += "motion";
+      uri.Param("reason", "setup");
+      uri.Param("port", serverPort);
+      uri.Param("on", 1);
       break;
     case Reason_Notif:
-      sUri += "notif";
+      uri.Param("reason", "notif");
       break;
   }
 
   IPAddress ip(ee.hostIP);
-  callQueue(ip, sUri, ee.hostPort);
+  callQueue(ip, uri.string(), ee.hostPort);
 }
 
 void LightSwitch(uint8_t t, uint8_t v)
 {
   if (ee.lightIP[0][0] == 0)
     return;
-  String sUri = "/wifi?key=";
-  sUri += controlPassword;
-  sUri += "&";
+  uriString uri("/wifi");
+  uri.Param("key", controlPassword);
   switch (t)
   {
     case 0: // switch
-      sUri += "pwr=";
+      uri.Param("pwr", v);
       break;
     case 1: // level
-      sUri += "level=";
+      uri.Param("level", v);
       break;
   }
-  sUri += v;
   IPAddress ip(ee.lightIP[0]);
-  callQueue(ip, sUri, 80);
+  callQueue(ip, uri.string(), 80);
+}
+
+void FanSwitch(uint8_t v)
+{
+  if (ee.lightIP[1][0] == 0)
+    return;
+  uriString uri("/wifi");
+  uri.Param("key", controlPassword);
+  uri.Param("pwr", v);
+  IPAddress ip(ee.lightIP[1]);
+
+  callQueue(ip, uri.string(), 80);
 }
 
 WebSocketsClient wsc;
@@ -556,15 +574,11 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length)
       break;
     case WStype_TEXT:
       {
-        char *pCmd = strtok((char *)payload, ";");
-        char *pData = strtok(NULL, "");
-        if (pCmd == NULL || pData == NULL) break;
-        //        remoteParse.process(pCmd, pData);
+        // remoteParse.process((char*)data);
       }
       break;
   }
 }
-
 
 void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len)
 { //Handle WebSocket event
@@ -576,7 +590,9 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
       if (bRestarted)
       {
         bRestarted = false;
-        client->text("alert;Restarted");
+        jsonString js("alert");
+        js.Var("data", "Restarted");
+        client->text(js.Close());
       }
 
       client->text(dataJson());
@@ -596,16 +612,32 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
         if (info->opcode == WS_TEXT) {
           data[len] = 0;
 
-          char *pCmd = strtok((char *)data, ";"); // assume format is "name;{json:x}"
-          char *pData = strtok(NULL, "");
-          if (pCmd == NULL || pData == NULL) break;
           bKeyGood = false; // for callback (all commands need a key)
-          jsonParse.process(pCmd, pData);
+          jsonParse.process((char*)data);
           ws.textAll(setJson()); // update the page settings
         }
       }
       break;
   }
+}
+
+void getSeason()
+{
+    tmElements_t tm;
+    breakTime(now(), tm);
+    tm.Month = 1; // set to first day of the year
+    tm.Day = 1;
+    time_t boy = makeTime(tm);
+    uint16_t doy = (now()- boy) / 60 / 60 / 24; // divide seconds into days
+
+    if(doy < ee.scheduleDays[0] || doy > ee.scheduleDays[3]) // winter
+      display.m_season = 3;
+    else if(doy < ee.scheduleDays[1]) // spring
+      display.m_season = 0;
+    else if(doy < ee.scheduleDays[2]) // summer
+      display.m_season = 1;
+    else
+      display.m_season = 2;
 }
 
 void setup()
@@ -616,18 +648,22 @@ void setup()
   Serial.println();
   Serial.println("Starting");
 #endif
-
   pinMode(MOTION, INPUT);
-  pinMode(ESP_LED, OUTPUT);
   pinMode(TONE, OUTPUT);
   digitalWrite(TONE, LOW);
   pinMode(BTN, INPUT_PULLUP);
   pinMode(HEAT, OUTPUT);
   digitalWrite(HEAT, LOW);
+#ifdef ESP_LED
+  pinMode(ESP_LED, OUTPUT);
   digitalWrite(ESP_LED, LOW);
+#endif
 
+  ee.init();
   WiFi.hostname(hostName);
   WiFi.mode(WIFI_STA);
+
+  display.init();
 
   if ( ee.szSSID[0] )
   {
@@ -637,7 +673,8 @@ void setup()
   }
   else
   {
-    Serial.println("No SSID. Waiting for EspTouch.");
+    IPAddress ip;
+    display.Notification("No SSID set\r\nWaiting for EspTouch", ip);
     WiFi.beginSmartConfig();
   }
   connectTimer = now();
@@ -662,10 +699,17 @@ void setup()
 
     if (!strcmp(szName, "HVAC"))
     {
+#ifdef ESP32
+      ee.hvacIP[0] = MDNS.address(i)[0]; // update IP
+      ee.hvacIP[1] = MDNS.address(i)[1];
+      ee.hvacIP[2] = MDNS.address(i)[2];
+      ee.hvacIP[3] = MDNS.address(i)[3];
+#else
       ee.hvacIP[0] = MDNS.IP(i)[0]; // update IP
       ee.hvacIP[1] = MDNS.IP(i)[1];
       ee.hvacIP[2] = MDNS.IP(i)[2];
       ee.hvacIP[3] = MDNS.IP(i)[3];
+#endif
       break;
     }
   }
@@ -698,6 +742,7 @@ void setup()
   server.on("/heap", HTTP_GET, [](AsyncWebServerRequest * request) {
     request->send(200, "text/plain", String(ESP.getFreeHeap()));
   });
+ /*
   server.on("/scan", HTTP_GET, [](AsyncWebServerRequest * request) {
     String json = "[";
     int n = WiFi.scanComplete();
@@ -724,7 +769,7 @@ void setup()
     json += "]";
     request->send(200, "text/json", json);
   });
-
+*/
   server.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest * request) {
 #ifdef USE_SPIFFS
     request->send(SPIFFS, "/favicon.ico");
@@ -745,12 +790,15 @@ void setup()
   ArduinoOTA.setHostname(hostName);
   ArduinoOTA.begin();
   ArduinoOTA.onStart([]() {
+    digitalWrite(SPEAKER, LOW);
     digitalWrite(HEAT, LOW);
     ee.tSecsMon[month() - 1] += onCounter;
     updateAll( true );
+    IPAddress ip;
+    display.Notification("OTA Update Started", ip);
   });
 #endif
-  jsonParse.addList(jsonListCmd);
+  jsonParse.setList(jsonListCmd);
 
   if ( ds.search(ds_addr) )
   {
@@ -774,13 +822,139 @@ void setup()
   }
 
   sht.init();
+#ifdef ESP_LED
   digitalWrite(ESP_LED, HIGH);
+#endif
   mus.add(2000, 50);
   mus.add(5000, 100);
+
+#ifdef ESP32
+  RADAR_SERIAL.begin(256000, SERIAL_8N1, RADAR_RX, RADAR_TX); //UART for monitoring the radar
+
+  if(radar.begin(RADAR_SERIAL))
+  {
+    if(!radar.requestCurrentConfiguration())
+      Serial.println("requestConfig failed");
+  }
+  else
+    Serial.println("radar.begin failed");
+#endif
 }
 
 uint8_t ssCnt = 30;
-uint8_t motCnt;
+uint8_t nLightTimer;
+
+#if defined(MOTION) && defined(ESP32)
+
+bool readRadar() // returns true if presence even while sleeping
+{
+  static bool bPresence;
+  static bool bInBed;
+  static uint16_t nLastDistance;
+  static uint16_t nDistArr[4];
+  static uint8_t idx;
+
+  radar.read();
+  if(!radar.isConnected() || millis() - lastReading < 200) // 5 Hz
+    return bPresence;
+
+  lastReading = millis();
+
+  bPresence = radar.presenceDetected();
+  bool bStationary = false;
+  bool bMoving = false;
+  uint8_t nEnergy;
+  static uint16_t nDistance;
+
+  if(bPresence)
+  {
+    bStationary = radar.stationaryTargetDetected();
+    bMoving = radar.movingTargetDetected();
+  }
+
+  if(bStationary && bMoving)
+  {
+    if( radar.movingTargetEnergy() >= radar.stationaryTargetEnergy())
+    {
+      if( radar.movingTargetDistance() )
+        nDistArr[idx++] = radar.movingTargetDistance();
+      nEnergy = radar.movingTargetEnergy();
+    }
+    else
+    {
+      if(radar.stationaryTargetDistance())
+        nDistArr[idx++] = radar.stationaryTargetDistance();
+      nEnergy = radar.stationaryTargetEnergy();
+    }
+  }
+  idx &= 3;
+  nDistance = 0;
+
+  for(uint8_t i = 0; i < 4; i++) // quick average. it bounces back and forth (person in and person out)
+    nDistance += nDistArr[i];
+  nDistance >>= 2;
+
+  if(nDistance != nLastDistance || nEnergy)
+  {
+    nLastDistance = nDistance;
+
+    jsonString js("radar");
+    js.Var("presence", bPresence);
+    js.Var("distance", nDistance);
+    js.Var("energy", nEnergy);
+    ws.textAll(js.Close());
+  }
+
+  const uint16_t nBedRange = 195; // ~200cm from headboard to foot
+
+  static uint32_t nTimeout;
+  if( !bPresence && bInBed && nDistance < nBedRange/2) // no detection but last valid is within bed range
+  {
+    if(millis() - nTimeout < 90000)
+      bPresence = true;
+  }
+  else
+  {
+    nTimeout = millis();
+  }
+
+  if( !bInBed && bPresence) // keep light on while out of bed
+  {
+    nLightTimer = 5;
+  }
+
+  if( !bInBed && bPresence && nDistance < nBedRange/2) // range moved to within bed
+  {
+    bInBed = true;
+    nLightTimer = 5;
+    FanSwitch(1);
+
+    mus.add(3000, 70);
+    ws.textAll("inBed 1");
+  }
+  else if( bInBed && nDistance > nBedRange) // range moved outside bed
+  {
+    bInBed = false;
+    nLightTimer = 0;
+    bMotion = false; // trigger lights on if someone gets out of bed (past the foot ususally, not the side)
+    display.screen(true);
+    LightSwitch(0, 1);
+    FanSwitch(0);
+    display.m_bLightOn = true;
+    mus.add(8000, 70);
+    ws.textAll("inBed 0");
+  }
+  else
+  {
+//    ws.textAll("else");
+  }
+
+  if(bPresence == false)
+    bInBed = false; // reset when gone
+
+  return bPresence;
+}
+#endif
 
 void loop()
 {
@@ -788,7 +962,9 @@ void loop()
   static int8_t min_save, sec_save, mon_save = -1;
   static bool bLastOn;
 
+#ifdef ESP8266
   MDNS.update();
+#endif
 #ifdef OTA_ENABLE
   ArduinoOTA.handle();
 #endif
@@ -798,8 +974,11 @@ void loop()
     nAlarming = 0; // stop alarm
 
   if (WiFi.status() == WL_CONNECTED)
-    if (utime.check(ee.tz))
+    if (udptime.check(ee.tz))
+    {
+      getSeason();
       checkSched(true);  // initialize
+    }
 
   if (sht.service())
   {
@@ -836,32 +1015,33 @@ void loop()
 #endif
   }
 
-#ifdef VIBE
-  if (vibeCnt)
-  {
-    delay(vibePeriod);
-    pinMode(VIBE, INPUT);
-    digitalWrite(VIBE, HIGH);
-    if (--vibeCnt)
-    {
-      pinMode(VIBE, OUTPUT);
-      digitalWrite(VIBE, LOW);
-    }
-  }
-#endif
-
 #ifdef MOTION
+
+#ifdef ESP32
+  if (readRadar() != bMotion)
+  {
+    bMotion = readRadar();
+#else
   if (digitalRead(MOTION) != bMotion)
   {
     bMotion = digitalRead(MOTION);
-    if (bMotion)
+#endif
+    if(bMotion) // entered room
     {
       sendState();
       display.screen(true);
       LightSwitch(0, 1);
+      display.m_bLightOn = true;
+    }
+    else // left room
+    {
+      LightSwitch(0, 0);
+      FanSwitch(0);
+      sendState();
     }
   }
 #endif
+
   mus.service();
 
   switch (display.m_LightSet)
@@ -880,52 +1060,56 @@ void loop()
   {
     sec_save = second();
 
-    if(!bConfigDone)
+    if (!bConfigDone)
     {
-      if( WiFi.smartConfigDone())
+      if ( WiFi.smartConfigDone())
       {
-        Serial.println("SmartConfig set");
+        WiFi.mode(WIFI_STA);
         bConfigDone = true;
         connectTimer = now();
       }
     }
-    if(bConfigDone)
+    if (bConfigDone)
     {
-      if(WiFi.status() == WL_CONNECTED)
+      if (WiFi.status() == WL_CONNECTED)
       {
-        if(!bStarted)
+        if (!bStarted)
         {
-          Serial.println("WiFi Connected");
-          MDNS.begin( hostName );
           bStarted = true;
-          utime.start();
+          udptime.start();
           MDNS.addService("iot", "tcp", serverPort);
           WiFi.SSID().toCharArray(ee.szSSID, sizeof(ee.szSSID)); // Get the SSID from SmartConfig or last used
           WiFi.psk().toCharArray(ee.szSSIDPassword, sizeof(ee.szSSIDPassword) );
           updateAll(false);
-          display.init();
           connectDimmer();
         }
-        if(utime.check(ee.tz))
+        if (udptime.check(ee.tz))
           checkSched(true);  // initialize
       }
-      else if(now() - connectTimer > 10) // failed to connect for some reason
+      else if (now() - connectTimer > 10) // failed to connect for some reason
       {
-        Serial.println("Connect failed. Starting SmartConfig");
+        IPAddress ip;
+        display.Notification("Connect Failedr\r\nWaiting for EspTouch", ip);
         connectTimer = now();
-        ee.szSSID[0] = 0;
         WiFi.mode(WIFI_AP_STA);
         WiFi.beginSmartConfig();
         bConfigDone = false;
         bStarted = false;
       }
+      else
+      {
+/*
+const char *szStat[] = {
+    "IDLE", "NO_SSID_AVAIL", "SCAN_COMPLETED", "CONNECTED", "CONNECT_FAILED", "CONNECTION_LOST", "DISCONNECTED"
+};
+
+        Serial.print( "WiFi " );
+        Serial.println( szStat[ WiFi.status()] );
+*/
+      }
     }
 
     checkTemp();
-
-    //    digitalWrite(ESP_LED, LOW);
-    //    delay(5);
-    //    digitalWrite(ESP_LED, HIGH);
 
     if (--ssCnt == 0)
       sendState();
@@ -939,7 +1123,9 @@ void loop()
       if (display.checkAlarms()) // returns true of an alarm == this time
       {
         nAlarming = 60;
-        ws.textAll("alert; Alarm");
+        jsonString js("alert");
+        js.Var("data", "Alarm");
+        ws.textAll(js.Close());
       }
 
       if ( min_save == 0)
@@ -947,7 +1133,7 @@ void loop()
         ta.add();
         if ( hour() == 2)     // update clock daily (at 2AM for DST)
         {
-          utime.start();
+          udptime.start();
           updateAll(false);    // update EEPROM daily
         }
         else if ( (hour() & 1) == 0) // even hour
@@ -961,11 +1147,18 @@ void loop()
           mon_save = month();
         }
         CallHost(Reason_Setup);
+        getSeason();
       }
       if (min_save == 30)
         ta.add(); // half hour log
+    }
 
-      display.m_season = utime.getDST(); // simple for now
+    if(nLightTimer) // in bed light timer
+    {
+      if(--nLightTimer == 0)
+      {
+        LightSwitch(0, 0);
+      }
     }
 
     if (nSnoozeTimer)
@@ -977,7 +1170,9 @@ void loop()
     if (nAlarming) // make noise
     {
       if (--nAlarming)
+      {
         mus.add(3000, 500);
+      }
     }
 
     if (nWrongPass)
@@ -1062,13 +1257,20 @@ void checkTemp()
   uint8_t present = ds.reset();
   ds.select(ds_addr);
   ds.write(0xBE);         // Read Scratchpad
+  IPAddress ip; // blank
 
   if (!present)     // safety
   {
     display.m_bHeater = false;
     setHeat();
-    ws.textAll("alert; DS18 not present");
-    display.Notification("WARNING\r\nDS18 not detected", (IPAddress)0);
+    static String s = "WARNING\r\nDS18 not detected";
+    if(display.m_sNotifCurr != s)
+    {
+      jsonString js("alert");
+      js.Var("data", "DS18 not present");
+      ws.textAll(js.Close());
+      display.Notification(s, ip);
+    }
     return;
   }
 
@@ -1079,16 +1281,20 @@ void checkTemp()
   {
     display.m_bHeater = false;
     setHeat();
-    ws.textAll("alert;Invalid CRC");
-    display.Notification("WARNING\r\nDS18 CRC error", (IPAddress)0);
+    jsonString js("alert");
+    js.Var("data", "DS18 Invalid CRC");
+    ws.textAll(js.Close());
+    display.Notification("WARNING\r\nDS18 CRC error", ip);
     return;
   }
 
   uint16_t raw = (data[1] << 8) | data[0];
 
   if (raw > 630 || raw < 200) { // first reading is always 1360 (0x550)
-    ws.textAll("alert;DS error");
-    display.Notification("WARNING\r\nDS18 error", (IPAddress)0);
+    jsonString js("alert");
+    js.Var("data", "DS18 Error");
+    ws.textAll(js.Close());
+    display.Notification("WARNING\r\nDS18 error", ip);
     return;
   }
 
@@ -1222,9 +1428,17 @@ String timeFmt(uint32_t v)
   return s;
 }
 
+void wsprint(String s)
+{
+  jsonString js("print");
+  js.Var("text", s);
+  ws.textAll( js.Close());
+}
+
 void sendState()
 {
   ws.textAll( dataJson() );
+  delay(10); // maybe fix the Windows issue
   ssCnt = ee.rate;
 }
 
@@ -1431,15 +1645,18 @@ void updateHvac()
   if (ee.hvacIP[0] == 0) // not set
     return;
 
-  String sUri = String("/s?key=");
-  sUri += controlPassword;
-  sUri += "&rmttemp="; sUri += display.m_roomTemp; sUri += (bCF) ? 'C':'F';
-  sUri += "&rmtrh="; sUri += display.m_rh;
-  sUri += "&rmtname="; sUri += WBID;
+  uriString uri("/s");
+  uri.Param("key", controlPassword);
+
+  String s =String(display.m_roomTemp);
+  s += ((bCF) ? 'C' : 'F');
+  uri.Param("rmttemp", s);
+  uri.Param("rmtrh", display.m_rh);
+  uri.Param("rmtname", WBID);
 
   IPAddress ip(ee.hvacIP);
   String url = ip.toString();
-  jsonPush.begin(url.c_str(), sUri.c_str(), 80, false, false, NULL, NULL);
-  jsonPush.addList(jsonListPush);
+  jsonPush.begin(url.c_str(), uri.string().c_str(), 80, false, false, NULL, NULL);
+  jsonPush.setList(jsonListPush);
 }
 #endif
